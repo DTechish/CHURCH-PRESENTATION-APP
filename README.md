@@ -1,17 +1,38 @@
-# church_presentation_app
+# Church Presentation App
 
-A new Flutter project.
+A Flutter application designed for church presentations with Bible content, media support, and song management.
 
-## Getting Started
+## Completed Features
 
-This project is a starting point for a Flutter application.
+### Screens
+- **Home Screen** - Main landing page
+- **Bible Screen** - Bible content viewing and navigation
+- **Song Screen** - Song management and display
+- **Media Screen** - Media content handling
+- **Settings Screen** - Application configuration
 
-A few resources to get you started if this is your first Flutter project:
+### Database
+- Integrated SQLite3 databases with multiple Bible translations:
+  - AMP (Amplified Bible)
+  - ESVGSB (ESV Gospel Study Bible)
+  - NASU (New American Standard Update)
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+### Styling
+- Custom app theme configuration in `app_theme.dart`
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+### Platform Support
+- Linux
+- macOS
+- Windows
+
+## To Do
+
+- [ ] Complete Bible screen functionality (search, navigation)
+- [ ] Implement song management features
+- [ ] Add media playback functionality
+- [ ] Configure settings screen options
+- [ ] Add presentation mode/full-screen display
+- [ ] Implement data persistence and user preferences
+- [ ] Add error handling and loading states
+- [ ] Create tests
+- [ ] Mobile platform support (iOS/Android)
