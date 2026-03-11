@@ -12,18 +12,18 @@ class MediaScreen extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           // Page title
-          const Text(
+          Text(
             'Media & Slides',
             style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
           ),
-          const SizedBox(height: 20),
+          SizedBox(height: 20),
 
           // Description of what this page does
-          const Text(
+          Text(
             'Manage your images, videos, and presentation slides here',
             style: TextStyle(fontSize: 16),
           ),
-          const SizedBox(height: 40),
+          SizedBox(height: 40),
 
           // Placeholder container for future media content
           Container(
@@ -33,7 +33,7 @@ class MediaScreen extends StatelessWidget {
               border: Border.all(color: Colors.grey),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Center(
+            child: Center(
               // Show message that content is coming soon
               child: Text('Media content coming soon!'),
             ),

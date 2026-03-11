@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
+import '../app_theme.dart';
 
 /// BibleScreen - Scripture/Bible search and display section
-/// Users can search for scriptures and view them with formatting
+/// Uses AppTheme for full light/dark mode support.
 class BibleScreen extends StatefulWidget {
   const BibleScreen({super.key});
 
@@ -10,10 +11,9 @@ class BibleScreen extends StatefulWidget {
 }
 
 class _BibleScreenState extends State<BibleScreen> {
-  // Controller to manage the search bar input
   late TextEditingController _searchController;
 
-  // For now, hardcoded sample scriptures - will connect to SQLite database later
+  // Hardcoded sample scriptures — will connect to SQLite database later
   final List<Map<String, String>> _sampleScriptures = [
     {
       'reference': 'John 3:16',
@@ -41,10 +41,7 @@ class _BibleScreenState extends State<BibleScreen> {
     },
   ];
 
-  // Currently selected scripture to display
   late Map<String, String> _selectedScripture;
-
-  // List of filtered scriptures based on search
   late List<Map<String, String>> _filteredScriptures;
 
   @override
@@ -52,130 +49,246 @@ class _BibleScreenState extends State<BibleScreen> {
     super.initState();
     _searchController = TextEditingController();
     _filteredScriptures = _sampleScriptures;
-    // Select the first scripture by default
     _selectedScripture = _sampleScriptures[0];
   }
 
   @override
   void dispose() {
-    // Clean up the search controller
     _searchController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final t = AppTheme.of(context);
+
     return Row(
       children: [
-        // LEFT SIDE: Search bar and Scripture list
+        // ── LEFT: search + scripture list ──────────────────────────────────────
         Container(
-          width: 350, // Fixed width for left panel
-          color: Colors.grey[900], // Darker background for list panel
+          width: 350,
+          color: t.surface,
           child: Column(
             children: [
-              // SEARCH BAR
-              Padding(
-                padding: const EdgeInsets.all(16.0),
+              // Search bar
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  border: Border(bottom: BorderSide(color: t.border)),
+                ),
                 child: TextField(
                   controller: _searchController,
-                  // Update filtered list as user types
                   onChanged: _filterScriptures,
+                  style: TextStyle(fontSize: 13, color: t.textPrimary),
                   decoration: InputDecoration(
-                    hintText: 'Search scriptures...',
-                    prefixIcon: const Icon(Icons.search),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
+                    hintText: 'Search scriptures…',
+                    hintStyle: TextStyle(fontSize: 12, color: t.textMuted),
+                    prefixIcon: Icon(
+                      Icons.search_rounded,
+                      size: 18,
+                      color: t.textMuted,
                     ),
                     filled: true,
-                    fillColor: Colors.grey[800],
+                    fillColor: t.appBg,
+                    contentPadding: const EdgeInsets.symmetric(
+                      vertical: 10,
+                      horizontal: 14,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: t.border),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: t.border),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: t.accentBlue, width: 1.5),
+                    ),
                   ),
                 ),
               ),
 
-              // SCRIPTURE LIST
+              // Scripture list
               Expanded(
-                child: ListView.builder(
-                  itemCount: _filteredScriptures.length,
-                  itemBuilder: (context, index) {
-                    final scripture = _filteredScriptures[index];
-                    final isSelected = scripture == _selectedScripture;
-
-                    return Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        // Select scripture when tapped
-                        onTap: () => _selectScripture(scripture),
-                        hoverColor: Colors.cyan.withValues(alpha: 0.2),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            vertical: 12,
-                            horizontal: 16,
-                          ),
-                          decoration: BoxDecoration(
-                            // Highlight selected scripture
-                            color: isSelected
-                                ? Colors.cyan.withValues(alpha: 0.3)
-                                : Colors.transparent,
-                            border: isSelected
-                                ? Border(
-                                    left: BorderSide(
-                                      color: Colors.cyan,
-                                      width: 4,
-                                    ),
-                                  )
-                                : null,
-                          ),
-                          child: Text(
-                            scripture['reference'] ?? 'Unknown',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: isSelected
-                                  ? FontWeight.bold
-                                  : FontWeight.normal,
-                              color: isSelected ? Colors.cyan : Colors.white,
-                            ),
+                child: _filteredScriptures.isEmpty
+                    ? Center(
+                        child: Text(
+                          'No results',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: t.textMuted,
                           ),
                         ),
+                      )
+                    : ListView.separated(
+                        itemCount: _filteredScriptures.length,
+                        separatorBuilder: (_, _) =>
+                            Divider(color: t.border, height: 1),
+                        itemBuilder: (context, index) {
+                          final scripture = _filteredScriptures[index];
+                          final isSelected = scripture == _selectedScripture;
+
+                          return InkWell(
+                            onTap: () => _selectScripture(scripture),
+                            hoverColor: t.accentBlue.withValues(alpha: 0.06),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 150),
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 12,
+                                horizontal: 16,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? t.accentBlue.withValues(alpha: 0.1)
+                                    : Colors.transparent,
+                                border: Border(
+                                  left: BorderSide(
+                                    color: isSelected
+                                        ? t.accentBlue
+                                        : Colors.transparent,
+                                    width: 3,
+                                  ),
+                                ),
+                              ),
+                              child: Text(
+                                scripture['reference'] ?? 'Unknown',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: isSelected
+                                      ? FontWeight.w600
+                                      : FontWeight.w400,
+                                  color: isSelected
+                                      ? t.accentBlue
+                                      : t.textPrimary,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
                       ),
-                    );
-                  },
-                ),
               ),
             ],
           ),
         ),
 
-        // RIGHT SIDE: Scripture display
+        // Divider between panels
+        VerticalDivider(width: 1, color: t.border),
+
+        // ── RIGHT: scripture display ───────────────────────────────────────────
         Expanded(
           child: Container(
-            color: Colors.black,
-            padding: const EdgeInsets.all(32.0),
+            color: t.appBg,
+            padding: const EdgeInsets.all(36),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Scripture reference as title
-                Text(
-                  _selectedScripture['reference'] ?? 'No scripture selected',
-                  style: const TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.cyan,
+                // Header card
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 18,
+                    horizontal: 24,
+                  ),
+                  decoration: BoxDecoration(
+                    color: t.surface,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: t.border),
+                  ),
+                  child: Row(
+                    children: [
+                      // Accent bar
+                      Container(
+                        width: 4,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: t.accentBlue,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      // Reference
+                      Expanded(
+                        child: Text(
+                          _selectedScripture['reference'] ??
+                              'No scripture selected',
+                          style: TextStyle(
+                            fontSize: 26,
+                            fontWeight: FontWeight.w700,
+                            color: t.accentBlue,
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                      ),
+                      // Bible badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: t.accentBlue.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: t.accentBlue.withValues(alpha: 0.25),
+                          ),
+                        ),
+                        child: Text(
+                          'SAMPLE',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: t.accentBlue,
+                            letterSpacing: 0.6,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
+
                 const SizedBox(height: 24),
 
-                // Scripture text display
+                // Scripture text card
                 Expanded(
-                  child: SingleChildScrollView(
-                    child: Text(
-                      _selectedScripture['text'] ??
-                          'No scripture text available',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        height: 1.8, // Line height for readability
-                        color: Colors.white,
+                  child: Container(
+                    padding: const EdgeInsets.all(32),
+                    decoration: BoxDecoration(
+                      color: t.surface,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: t.border),
+                    ),
+                    child: SingleChildScrollView(
+                      child: Text(
+                        _selectedScripture['text'] ??
+                            'No scripture text available',
+                        style: TextStyle(
+                          fontSize: 20,
+                          height: 1.9,
+                          color: t.textPrimary,
+                          fontWeight: FontWeight.w300,
+                          letterSpacing: 0.15,
+                        ),
                       ),
                     ),
+                  ),
+                ),
+
+                // Footer
+                Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(width: 24, height: 1, color: t.border),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Church Presentation Software',
+                        style: TextStyle(fontSize: 11, color: t.textMuted),
+                      ),
+                      const SizedBox(width: 10),
+                      Container(width: 24, height: 1, color: t.border),
+                    ],
                   ),
                 ),
               ],
@@ -186,33 +299,23 @@ class _BibleScreenState extends State<BibleScreen> {
     );
   }
 
-  /// Update the filtered scriptures list based on search input
   void _filterScriptures(String query) {
     setState(() {
-      if (query.isEmpty) {
-        // Show all scriptures if search is empty
-        _filteredScriptures = _sampleScriptures;
-      } else {
-        // Filter scriptures by reference or text content
-        _filteredScriptures = _sampleScriptures
-            .where(
-              (scripture) =>
-                  scripture['reference']!.toLowerCase().contains(
-                    query.toLowerCase(),
-                  ) ||
-                  scripture['text']!.toLowerCase().contains(
-                    query.toLowerCase(),
-                  ),
-            )
-            .toList();
-      }
+      _filteredScriptures = query.isEmpty
+          ? _sampleScriptures
+          : _sampleScriptures
+                .where(
+                  (s) =>
+                      s['reference']!.toLowerCase().contains(
+                        query.toLowerCase(),
+                      ) ||
+                      s['text']!.toLowerCase().contains(query.toLowerCase()),
+                )
+                .toList();
     });
   }
 
-  /// Select a scripture and display it
   void _selectScripture(Map<String, String> scripture) {
-    setState(() {
-      _selectedScripture = scripture;
-    });
+    setState(() => _selectedScripture = scripture);
   }
 }
