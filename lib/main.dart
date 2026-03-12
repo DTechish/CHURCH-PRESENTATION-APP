@@ -1,75 +1,52 @@
 import 'package:flutter/material.dart';
+import 'package:window_manager/window_manager.dart';
+import 'app_theme.dart';
 import 'screens/home_screen.dart';
 import 'screens/media_screen.dart';
 import 'screens/settings_screen.dart';
-import 'app_theme.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ENTRY POINT
-// ─────────────────────────────────────────────────────────────────────────────
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await windowManager.ensureInitialized();
 
-void main() => runApp(const ChurchPresentationApp());
+  const options = WindowOptions(
+    backgroundColor: Colors.black,
+    skipTaskbar: false,
+    titleBarStyle: TitleBarStyle.normal,
+    title: 'Church Presenter',
+  );
 
-/// Root widget — wraps everything in [ThemeNotifierWidget] so every descendant
-/// can call [AppTheme.of(context)] or [ThemeNotifier.of(context).toggle()].
+  await windowManager.waitUntilReadyToShow(options, () async {
+    await windowManager.maximize();
+    await windowManager.show();
+    await windowManager.focus();
+  });
+
+  runApp(const ChurchPresentationApp());
+}
+
 class ChurchPresentationApp extends StatelessWidget {
   const ChurchPresentationApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return ThemeNotifierWidget(child: _ThemedMaterialApp());
-  }
-}
-
-/// Reads the current [AppTheme] and rebuilds [MaterialApp] whenever it changes.
-class _ThemedMaterialApp extends StatelessWidget {
-  const _ThemedMaterialApp();
-
-  @override
-  Widget build(BuildContext context) {
-    final t = AppTheme.of(context);
-
-    return MaterialApp(
-      title: 'Church Presentation',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: t.isDark ? Brightness.dark : Brightness.light,
-        scaffoldBackgroundColor: t.appBg,
-        colorScheme: ColorScheme(
-          brightness: t.isDark ? Brightness.dark : Brightness.light,
-          primary: t.accentBlue,
-          onPrimary: t.isDark ? t.appBg : Colors.white,
-          secondary: t.accentPurple,
-          onSecondary: Colors.white,
-          error: Colors.red,
-          onError: Colors.white,
-          surface: t.surface,
-          onSurface: t.textPrimary,
-        ),
-        appBarTheme: AppBarTheme(
-          backgroundColor: t.surface,
-          elevation: 0,
-          titleTextStyle: TextStyle(
-            color: t.textPrimary,
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
+    return ThemeNotifierWidget(
+      child: Builder(
+        builder: (context) => MaterialApp(
+          title: 'Church Presenter',
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(
+            brightness: Brightness.dark,
+            useMaterial3: true,
+            colorSchemeSeed: Colors.indigo,
+            visualDensity: VisualDensity.adaptivePlatformDensity,
           ),
+          home: const MainScreen(),
         ),
-        popupMenuTheme: PopupMenuThemeData(
-          color: t.surfaceHigh,
-          textStyle: TextStyle(color: t.textPrimary, fontSize: 13),
-        ),
-        dividerTheme: DividerThemeData(color: t.border, space: 1),
       ),
-      home: const MainScreen(),
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MAIN SCREEN
-// ─────────────────────────────────────────────────────────────────────────────
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -79,286 +56,331 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  int _selectedTab = 0;
+  int _selectedNavIndex = 0;
 
-  static const List<Widget> _screens = [
-    HomeScreen(),
-    MediaScreen(),
-    SettingsScreen(),
-  ];
+  static const _kBarBg     = Color(0xFF1E2533);
+  static const _kBarFg     = Color(0xFFCCCCCC);
+  static const _kHoverBg   = Color(0xFF2D3A4F);
+  static const _kDropBg    = Color(0xFF252D3B);
+  static const _kDropHover = Color(0xFF2D3A4F);
+  static const _kDivider   = Color(0xFF3A4459);
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.of(context).appBg,
-      body: Column(
-        children: [
-          const _MenuBar(),
-          _TitleBar(
-            selectedTab: _selectedTab,
-            onTabSelected: (i) => setState(() => _selectedTab = i),
+    return Column(
+      children: [
+        // ── Menu bar ───────────────────────────────────────────────────────────
+        Material(
+          color: _kBarBg,
+          child: SizedBox(
+            height: 28,
+            child: _BarCoord(
+              child: Row(
+              children: [
+                _DesktopMenu(
+                  label: 'File',
+                  barFg: _kBarFg, hoverBg: _kHoverBg,
+                  dropBg: _kDropBg, dropHover: _kDropHover, divider: _kDivider,
+                  items: [
+                    _Item('New',     shortcut: 'Ctrl+N'),
+                    _Item('Open',    shortcut: 'Ctrl+O'),
+                    _Item('Save',    shortcut: 'Ctrl+S'),
+                    _Item('Save As', shortcut: 'Ctrl+Shift+S'),
+                    _Divider(),
+                    _Item('Exit', onTap: () => windowManager.close()),
+                  ],
+                ),
+                _DesktopMenu(
+                  label: 'Edit',
+                  barFg: _kBarFg, hoverBg: _kHoverBg,
+                  dropBg: _kDropBg, dropHover: _kDropHover, divider: _kDivider,
+                  items: [
+                    _Item('Undo',  shortcut: 'Ctrl+Z'),
+                    _Item('Redo',  shortcut: 'Ctrl+Y'),
+                    _Divider(),
+                    _Item('Cut',   shortcut: 'Ctrl+X'),
+                    _Item('Copy',  shortcut: 'Ctrl+C'),
+                    _Item('Paste', shortcut: 'Ctrl+V'),
+                  ],
+                ),
+                _DesktopMenu(
+                  label: 'View',
+                  barFg: _kBarFg, hoverBg: _kHoverBg,
+                  dropBg: _kDropBg, dropHover: _kDropHover, divider: _kDivider,
+                  items: [
+                    _Item('Zoom In',    shortcut: 'Ctrl++'),
+                    _Item('Zoom Out',   shortcut: 'Ctrl+-'),
+                    _Item('Reset Zoom', shortcut: 'Ctrl+0'),
+                    _Divider(),
+                    _Item('Fullscreen', shortcut: 'F11'),
+                  ],
+                ),
+                _DesktopMenu(
+                  label: 'Help',
+                  barFg: _kBarFg, hoverBg: _kHoverBg,
+                  dropBg: _kDropBg, dropHover: _kDropHover, divider: _kDivider,
+                  items: [
+                    _Item('Documentation'),
+                    _Item('Keyboard Shortcuts'),
+                    _Divider(),
+                    _Item('About'),
+                  ],
+                ),
+              ],
+            ),
+            ),
           ),
-          Expanded(
-            child: IndexedStack(index: _selectedTab, children: _screens),
+        ),
+
+        // ── App bar + body ─────────────────────────────────────────────────────
+        Expanded(
+          child: Scaffold(
+            appBar: AppBar(
+              elevation: 4,
+              title: Row(
+                children: [
+                  _navBtn('Home',     0),
+                  _navBtn('Media',    1),
+                  _navBtn('Settings', 2),
+                ],
+              ),
+            ),
+            body: _body(),
           ),
-        ],
-      ),
+        ),
+      ],
     );
+  }
+
+  Widget _navBtn(String label, int index) => Padding(
+        padding: const EdgeInsets.all(8),
+        child: TextButton(
+          onPressed: () => setState(() => _selectedNavIndex = index),
+          style: TextButton.styleFrom(
+            backgroundColor: _selectedNavIndex == index
+                ? Colors.cyan
+                : Colors.transparent,
+          ),
+          child: Text(label,
+              style: const TextStyle(fontSize: 16, color: Colors.white)),
+        ),
+      );
+
+  Widget _body() {
+    switch (_selectedNavIndex) {
+      case 0:  return const HomeScreen();
+      case 1:  return const MediaScreen();
+      case 2:  return const SettingsScreen();
+      default: return const HomeScreen();
+    }
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MENU BAR
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Menu entry types ──────────────────────────────────────────────────────────
 
-class _MenuBar extends StatelessWidget {
-  const _MenuBar();
+abstract class _Entry {}
 
-  static const Map<String, List<String>> _menus = {
-    'File': ['New', 'Open', 'Save', 'Save As', 'Exit'],
-    'Edit': ['Undo', 'Redo', 'Cut', 'Copy', 'Paste'],
-    'View': ['Zoom In', 'Zoom Out', 'Reset Zoom', 'Fullscreen'],
-    'Help': ['About', 'Documentation', 'Keyboard Shortcuts'],
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final t = AppTheme.of(context);
-    return Container(
-      height: 30,
-      color: t.menuBarBg,
-      child: Row(
-        children: _menus.entries
-            .map((entry) => _MenuBarItem(name: entry.key, items: entry.value))
-            .toList(),
-      ),
-    );
-  }
+class _Item extends _Entry {
+  _Item(this.label, {this.shortcut, this.onTap});
+  final String label;
+  final String? shortcut;
+  final VoidCallback? onTap;
 }
 
-class _MenuBarItem extends StatelessWidget {
-  const _MenuBarItem({required this.name, required this.items});
+class _Divider extends _Entry {
+  _Divider();
+}
 
-  final String name;
-  final List<String> items;
+// ── Desktop menu ──────────────────────────────────────────────────────────────
+// Uses MenuAnchor (Flutter 3.7+) for native-feel: no animation delay, flush
+// positioning, hover-to-switch, keyboard navigation built-in.
+
+class _DesktopMenu extends StatefulWidget {
+  const _DesktopMenu({
+    required this.label,
+    required this.items,
+    required this.barFg,
+    required this.hoverBg,
+    required this.dropBg,
+    required this.dropHover,
+    required this.divider,
+  });
+
+  final String label;
+  final List<_Entry> items;
+  final Color barFg, hoverBg, dropBg, dropHover, divider;
+
+  @override
+  State<_DesktopMenu> createState() => _DesktopMenuState();
+}
+
+class _DesktopMenuState extends State<_DesktopMenu> {
+  final _controller = MenuController();
+  bool _hovered = false;
 
   @override
   Widget build(BuildContext context) {
-    final t = AppTheme.of(context);
-    return PopupMenuButton<String>(
-      onSelected: (value) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$name › $value'),
-            duration: const Duration(seconds: 1),
-            backgroundColor: t.surfaceHigh,
+    final isOpen = _controller.isOpen;
+
+    return MenuAnchor(
+      controller: _controller,
+      // Flush with no gap — aligns exactly under the bar item
+      alignmentOffset: Offset.zero,
+      // Remove the default Material animation so it opens instantly
+      style: MenuStyle(
+        backgroundColor: WidgetStatePropertyAll(widget.dropBg),
+        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+        elevation: const WidgetStatePropertyAll(6),
+        padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 4)),
+        shape: WidgetStatePropertyAll(RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(3),
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.07)),
+        )),
+        // Zero animation duration = instant open, no delay
+        maximumSize: const WidgetStatePropertyAll(Size(360, 600)),
+      ),
+      menuChildren: [
+        for (final entry in widget.items)
+          if (entry is _Divider)
+            Divider(height: 1, thickness: 1, color: widget.divider,
+                indent: 0, endIndent: 0)
+          else
+            _MenuRow(
+              item: entry as _Item,
+              hoverColor: widget.dropHover,
+              onTap: () {
+                _controller.close();
+                (entry).onTap?.call();
+              },
+            ),
+      ],
+      builder: (context, controller, _) {
+        return MouseRegion(
+          onEnter: (_) {
+            setState(() => _hovered = true);
+            // Hover-switch: if another menu is open, steal it
+            final bar = context.findAncestorStateOfType<_BarCoordState>();
+            if (bar != null && bar.hasOpen && !controller.isOpen) {
+              bar.switchTo(controller);
+            }
+          },
+          onExit: (_) => setState(() => _hovered = false),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              if (controller.isOpen) {
+                controller.close();
+                context.findAncestorStateOfType<_BarCoordState>()?.clear();
+              } else {
+                controller.open();
+                context.findAncestorStateOfType<_BarCoordState>()
+                    ?.switchTo(controller);
+              }
+              setState(() {});
+            },
+            child: Container(
+              height: 28,
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              color: _hovered || isOpen ? widget.hoverBg : Colors.transparent,
+              child: Text(
+                widget.label,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: widget.barFg,
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+            ),
           ),
         );
       },
-      itemBuilder: (_) => items
-          .map(
-            (item) => PopupMenuItem<String>(
-              value: item,
-              height: 36,
-              child: Text(item, style: TextStyle(fontSize: 13)),
-            ),
-          )
-          .toList(),
-      offset: const Offset(0, 30),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        child: Text(
-          name,
-          style: TextStyle(
-            color: t.textSecondary,
-            fontSize: 12,
-            fontWeight: FontWeight.w400,
-          ),
-        ),
-      ),
     );
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TITLE BAR
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Individual drop-down row ──────────────────────────────────────────────────
 
-class _TitleBar extends StatelessWidget {
-  const _TitleBar({required this.selectedTab, required this.onTabSelected});
-
-  final int selectedTab;
-  final ValueChanged<int> onTabSelected;
-
-  static const _tabs = [
-    (icon: Icons.home_rounded, label: 'Home'),
-    (icon: Icons.perm_media_rounded, label: 'Media'),
-    (icon: Icons.settings_rounded, label: 'Settings'),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final t = AppTheme.of(context);
-    return Container(
-      height: 52,
-      decoration: BoxDecoration(
-        color: t.surface,
-        border: Border(bottom: BorderSide(color: t.border)),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        children: [
-          // App logo
-          Row(
-            children: [
-              Container(
-                width: 28,
-                height: 28,
-                decoration: BoxDecoration(
-                  color: t.accentBlue.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(
-                    color: t.accentBlue.withValues(alpha: 0.3),
-                  ),
-                ),
-                child: Icon(
-                  Icons.church_rounded,
-                  size: 16,
-                  color: t.accentBlue,
-                ),
-              ),
-              SizedBox(width: 10),
-              Text(
-                'Church Presenter',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: t.textPrimary,
-                  letterSpacing: 0.2,
-                ),
-              ),
-            ],
-          ),
-
-          SizedBox(width: 32),
-
-          // Tab pills
-          Row(
-            children: [
-              for (int i = 0; i < _tabs.length; i++)
-                _TabPill(
-                  icon: _tabs[i].icon,
-                  label: _tabs[i].label,
-                  isSelected: selectedTab == i,
-                  onTap: () => onTabSelected(i),
-                ),
-            ],
-          ),
-
-          const Spacer(),
-
-          // Status + theme toggle
-          Row(
-            children: [
-              // Theme toggle icon button
-              Tooltip(
-                message: AppTheme.of(context).isDark
-                    ? 'Switch to Light Mode'
-                    : 'Switch to Dark Mode',
-                child: InkWell(
-                  onTap: () => ThemeNotifier.of(context).toggle(),
-                  borderRadius: BorderRadius.circular(6),
-                  child: Padding(
-                    padding: const EdgeInsets.all(6),
-                    child: Icon(
-                      AppTheme.of(context).isDark
-                          ? Icons.light_mode_rounded
-                          : Icons.dark_mode_rounded,
-                      size: 16,
-                      color: t.textSecondary,
-                    ),
-                  ),
-                ),
-              ),
-              SizedBox(width: 12),
-              // Ready indicator
-              Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF4CAF50),
-                  shape: BoxShape.circle,
-                ),
-              ),
-              SizedBox(width: 6),
-              Text(
-                'Ready',
-                style: TextStyle(fontSize: 11, color: t.textSecondary),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TabPill extends StatelessWidget {
-  const _TabPill({
-    required this.icon,
-    required this.label,
-    required this.isSelected,
+class _MenuRow extends StatefulWidget {
+  const _MenuRow({
+    required this.item,
+    required this.hoverColor,
     required this.onTap,
   });
-
-  final IconData icon;
-  final String label;
-  final bool isSelected;
+  final _Item item;
+  final Color hoverColor;
   final VoidCallback onTap;
 
   @override
+  State<_MenuRow> createState() => _MenuRowState();
+}
+
+class _MenuRowState extends State<_MenuRow> {
+  bool _hovered = false;
+
+  @override
   Widget build(BuildContext context) {
-    final t = AppTheme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(right: 4),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-          decoration: BoxDecoration(
-            color: isSelected
-                ? t.accentBlue.withValues(alpha: 0.15)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isSelected
-                  ? t.accentBlue.withValues(alpha: 0.4)
-                  : Colors.transparent,
-            ),
-          ),
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit:  (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: Container(
+          color: _hovered ? widget.hoverColor : Colors.transparent,
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                icon,
-                size: 15,
-                color: isSelected ? t.accentBlue : t.textSecondary,
-              ),
-              SizedBox(width: 6),
               Text(
-                label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                  color: isSelected ? t.accentBlue : t.textSecondary,
-                ),
+                widget.item.label,
+                style: const TextStyle(fontSize: 13, color: Color(0xFFDDDDDD)),
               ),
+              if (widget.item.shortcut != null) ...[
+                const SizedBox(width: 32),
+                Text(
+                  widget.item.shortcut!,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.white.withValues(alpha: 0.33),
+                  ),
+                ),
+              ],
+              // Minimum width so narrow labels still have room for shortcuts
+              const SizedBox(width: 4),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+// ── Bar coordinator ───────────────────────────────────────────────────────────
+// Invisible widget that sits above the menu buttons so they can coordinate
+// hover-switching (close the previously open menu, open the hovered one).
+
+class _BarCoord extends StatefulWidget {
+  const _BarCoord({required this.child});
+  final Widget child;
+  @override
+  _BarCoordState createState() => _BarCoordState();
+}
+
+class _BarCoordState extends State<_BarCoord> {
+  MenuController? _open;
+
+  bool get hasOpen => _open != null && _open!.isOpen;
+
+  void switchTo(MenuController next) {
+    if (_open != null && _open != next && _open!.isOpen) {
+      _open!.close();
+    }
+    setState(() => _open = next);
+  }
+
+  void clear() => setState(() => _open = null);
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

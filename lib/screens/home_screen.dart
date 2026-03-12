@@ -431,6 +431,12 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Approximate height of each verse row in the overview panel (px).
   static const double _kVerseRowHeight = 52.0;
 
+  // Song overview (Col 3)
+  /// Song selected in the Col1 list — drives the Col3 section list.
+  Map<String, String>? _selectedSong;
+  /// Section currently highlighted/live in the song overview.
+  SongSection? _selectedSection;
+
   // ── Service plan ───────────────────────────────────────────────────────────
 
   final List<ServiceItem> _plan = [];
@@ -458,28 +464,71 @@ class _HomeScreenState extends State<HomeScreen> {
       'title': 'Amazing Grace',
       'artist': 'John Newton',
       'lyrics':
+          '[Verse 1]\n'
           'Amazing grace, how sweet the sound\n'
           'That saved a wretch like me\n'
           'I once was lost but now am found\n'
-          'Was blind but now I see',
+          'Was blind but now I see\n'
+          '[Verse 2]\n'
+          "'Twas grace that taught my heart to fear\n"
+          'And grace my fears relieved\n'
+          'How precious did that grace appear\n'
+          'The hour I first believed\n'
+          '[Chorus]\n'
+          'My chains are gone, I\'ve been set free\n'
+          'My God, my Savior has ransomed me\n'
+          'And like a flood His mercy rains\n'
+          'Unending love, amazing grace\n'
+          '[Verse 3]\n'
+          'The Lord has promised good to me\n'
+          'His word my hope secures\n'
+          'He will my shield and portion be\n'
+          'As long as life endures',
     },
     {
       'title': 'How Great Thou Art',
       'artist': 'Carl Boberg',
       'lyrics':
+          '[Verse 1]\n'
           'O Lord my God, when I in awesome wonder\n'
           'Consider all the worlds thy hands have made\n'
           'I see the stars, I hear the rolling thunder\n'
-          'Thy power throughout the universe displayed',
+          'Thy power throughout the universe displayed\n'
+          '[Chorus]\n'
+          'Then sings my soul, my Savior God, to thee\n'
+          'How great thou art, how great thou art\n'
+          'Then sings my soul, my Savior God, to thee\n'
+          'How great thou art, how great thou art\n'
+          '[Verse 2]\n'
+          'When through the woods and forest glades I wander\n'
+          'And hear the birds sing sweetly in the trees\n'
+          'When I look down from lofty mountain grandeur\n'
+          'And hear the brook and feel the gentle breeze\n'
+          '[Verse 3]\n'
+          'And when I think that God, his Son not sparing\n'
+          'Sent him to die, I scarce can take it in\n'
+          'That on the cross, my burden gladly bearing\n'
+          'He bled and died to take away my sin',
     },
     {
       'title': 'Jesus Loves Me',
       'artist': 'Traditional',
       'lyrics':
+          '[Verse 1]\n'
           'Jesus loves me, this I know\n'
           'For the Bible tells me so\n'
           'Little ones to Him belong\n'
-          'They are weak but He is strong',
+          'They are weak but He is strong\n'
+          '[Chorus]\n'
+          'Yes, Jesus loves me\n'
+          'Yes, Jesus loves me\n'
+          'Yes, Jesus loves me\n'
+          'The Bible tells me so\n'
+          '[Verse 2]\n'
+          'Jesus loves me, he who died\n'
+          'Heaven\'s gate to open wide\n'
+          'He will wash away my sin\n'
+          'Let his little child come in',
     },
   ];
 
@@ -541,15 +590,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
           VerticalDivider(width: 1, color: context.t.border),
 
-          // ── Col 2: Chapter verse overview — always visible (fixed 240px) ─────
+          // ── Col 2: Verse overview (fixed 220px) ─────────────────────────────────────────
           SizedBox(
-            width: 240,
+            width: 220,
             child: _buildChapterOverviewPanel(),
           ),
 
           VerticalDivider(width: 1, color: context.t.border),
 
-          // ── Col 3: Operator preview (top) + Service Plan (bottom) ────────────
+          // ── Col 3: Song overview (fixed 220px) ─────────────────────────────────────────
+          SizedBox(
+            width: 220,
+            child: _buildSongOverviewPanel(),
+          ),
+
+          VerticalDivider(width: 1, color: context.t.border),
+
+          // ── Col 4: Operator preview (top) + Service Plan (bottom) ────────────
           Expanded(
             child: Container(
               color: context.t.appBg,
@@ -559,7 +616,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     flex: 6,
                     child: _buildDisplaySection(),
                   ),
-                  _buildServicePlanPanel(),
+                  Flexible(
+                    flex: 4,
+                    child: _buildServicePlanPanel(),
+                  ),
                 ],
               ),
             ),
@@ -1001,7 +1061,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildServicePlanPanel() {
     final t = context.t;
     return Container(
-      height: 260,
       decoration: BoxDecoration(
         color: t.surface,
         border: Border(top: BorderSide(color: t.border, width: 1.5)),
@@ -1335,7 +1394,21 @@ class _HomeScreenState extends State<HomeScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _SectionLabel(label: 'SONGS', accent: context.t.accentPurple),
+        Row(
+          children: [
+            Expanded(child: _SectionLabel(label: 'SONGS', accent: context.t.accentPurple)),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Tooltip(
+                message: 'Add new song',
+                child: GestureDetector(
+                  onTap: () => _showSongEditorDialog(null),
+                  child: Icon(Icons.add_rounded, size: 16, color: context.t.accentPurple),
+                ),
+              ),
+            ),
+          ],
+        ),
 
         Container(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
@@ -1393,18 +1466,14 @@ class _HomeScreenState extends State<HomeScreen> {
                       Divider(color: context.t.border, height: 1),
                   itemBuilder: (context, index) {
                     final song = _filteredSongs[index];
-                    final isActive = _activeItem?.type == ServiceItemType.song &&
-                        _activeItem?.song?['title'] == song['title'];
+                    final isSelected = _selectedSong?['title'] == song['title'];
                     return InkWell(
-                      onDoubleTap: () {
+                      // Single-tap: load this song's sections in the overview
+                      onTap: () {
                         setState(() {
-                          _plan.add(ServiceItem(
-                            type: ServiceItemType.song,
-                            song: song,
-                          ));
-                          _activeIndex = _plan.length - 1;
+                          _selectedSong = song;
+                          _selectedSection = null;
                         });
-                        _autoSavePlan();
                       },
                       hoverColor: context.t.accentPurple.withValues(
                         alpha: 0.06,
@@ -1416,10 +1485,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           horizontal: 14,
                         ),
                         decoration: BoxDecoration(
-                          color: isActive
+                          color: isSelected
                               ? context.t.accentPurple.withValues(alpha: 0.1)
                               : Colors.transparent,
-                          border: isActive
+                          border: isSelected
                               ? Border(
                                   left: BorderSide(
                                     color: context.t.accentPurple,
@@ -1441,7 +1510,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w500,
-                                color: isActive
+                                color: isSelected
                                     ? context.t.accentPurple
                                     : context.t.textPrimary,
                               ),
@@ -1482,7 +1551,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildDisplaySection() {
     final item = _activeItem;
-    if (item == null) return _buildWelcomeScreen();
+    // Nothing live — show selected section preview if tapped in song overview
+    if (item == null) {
+      if (_selectedSection != null && _selectedSong != null) {
+        final previewSong = Map<String, String>.from(_selectedSong!)
+          ..['lyrics'] = _selectedSection!.text
+          ..['_sectionLabel'] = _selectedSection!.label;
+        return _buildSongPreview(previewSong);
+      }
+      return _buildWelcomeScreen();
+    }
 
     switch (item.type) {
       case ServiceItemType.scripture:
@@ -1584,27 +1662,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   )
                 : Builder(builder: (context) {
-                    // Build a collapsed list: skip empty verses (MSG), show range labels
-                    final rows = <({int startVerse, int endVerse, String text})>[];
-                    int i = 0;
-                    while (i < _verseList.length) {
-                      final raw = (_verseList[i]['text'] as String?) ?? '';
-                      final plain = ScriptureQueueItem.toPlain(raw);
-                      final startNum = _verseList[i]['verse'] as int;
-                      if (plain.isEmpty) { i++; continue; } // skip empty slots
-                      // Collect any following empty verses into this range
-                      int endNum = startNum;
-                      int j = i + 1;
-                      while (j < _verseList.length) {
-                        final nextPlain = ScriptureQueueItem.toPlain(
-                            (_verseList[j]['text'] as String?) ?? '');
-                        if (nextPlain.isNotEmpty) break;
-                        endNum = _verseList[j]['verse'] as int;
-                        j++;
-                      }
-                      rows.add((startVerse: startNum, endVerse: endNum, text: plain));
-                      i = j;
-                    }
+                    final rows = _buildVerseRows();
                     return ListView.builder(
                       controller: _verseOverviewScroll,
                       padding: EdgeInsets.zero,
@@ -1622,23 +1680,508 @@ class _HomeScreenState extends State<HomeScreen> {
                   }),
           ),
 
-          // ── Footer hint ─────────────────────────────────────────────────────
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              border: Border(top: BorderSide(color: t.border)),
-              color: t.surfaceHigh,
-            ),
-            child: Text(
-              'Single tap to select  ·  Double tap to display',
-              style: TextStyle(fontSize: 9, color: t.textMuted),
-              textAlign: TextAlign.center,
-            ),
+          // ── Prev / Next navigation bar ───────────────────────────────────────
+          _buildOverviewNavBar(
+            accent: t.accentBlue,
+            onPrev: _verseList.isEmpty ? null : () {
+              final rows = _buildVerseRows();
+              if (rows.isEmpty) return;
+              final cur = rows.indexWhere((r) => r.startVerse == _pickerFromVerse);
+              final idx = (cur <= 0) ? rows.length - 1 : cur - 1;
+              setState(() {
+                _pickerFromVerse = rows[idx].startVerse;
+                _pickerToVerse  = rows[idx].endVerse;
+              });
+              _addPickerSelectionToQueue();
+            },
+            onNext: _verseList.isEmpty ? null : () {
+              final rows = _buildVerseRows();
+              if (rows.isEmpty) return;
+              final cur = rows.indexWhere((r) => r.startVerse == _pickerFromVerse);
+              final idx = (cur < 0 || cur >= rows.length - 1) ? 0 : cur + 1;
+              setState(() {
+                _pickerFromVerse = rows[idx].startVerse;
+                _pickerToVerse  = rows[idx].endVerse;
+              });
+              _addPickerSelectionToQueue();
+            },
           ),
         ],
       ),
     );
   }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // COL 3 — SONG SECTION OVERVIEW
+  // ───────────────────────────────────────────────────────────────────────────
+
+  Widget _buildSongOverviewPanel() {
+    final t = context.t;
+    final song = _selectedSong;
+
+    // Parse sections from the selected song's lyrics
+    final sections = song != null
+        ? parseSongSections(song['lyrics'] ?? '')
+        : <SongSection>[];
+
+    return Container(
+      color: t.surface,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── Header ──────────────────────────────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: t.surfaceHigh,
+              border: Border(bottom: BorderSide(color: t.border)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.music_note_rounded, size: 13, color: t.accentPurple),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    song != null
+                        ? song['title'] ?? 'Song Overview'
+                        : 'Song Overview',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: t.textPrimary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (sections.isNotEmpty)
+                  Text(
+                    '${sections.length}',
+                    style: TextStyle(fontSize: 10, color: t.textMuted),
+                  ),
+                if (song != null)
+                  GestureDetector(
+                    onTap: () => _showSongEditorDialog(song),
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: Icon(Icons.edit_rounded, size: 13, color: t.textMuted),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+          // ── Body ────────────────────────────────────────────────────────────
+          Expanded(
+            child: song == null
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.music_note_outlined, size: 36, color: t.textMuted),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Select a song\nfrom the list',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 12, color: t.textMuted, height: 1.5),
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    padding: EdgeInsets.zero,
+                    itemCount: sections.length,
+                    itemBuilder: (context, index) {
+                      final section = sections[index];
+                      final isSelected = _selectedSection?.label == section.label &&
+                          _selectedSection?.text == section.text;
+                      final isLive = _activeItem?.type == ServiceItemType.song &&
+                          _activeItem?.song?['title'] == song['title'] &&
+                          _activeItem?.song?['_sectionLabel'] == section.label;
+
+                      return InkWell(
+                        // Single-tap: preview this section in Col 4
+                        onTap: () => setState(() => _selectedSection = section),
+                        // Double-tap: add to plan and go live
+                        onDoubleTap: () {
+                          final sectionSong = Map<String, String>.from(song)
+                            ..['lyrics'] = section.text
+                            ..['_sectionLabel'] = section.label;
+                          setState(() {
+                            _selectedSection = section;
+                            _plan.add(ServiceItem(
+                              type: ServiceItemType.song,
+                              song: sectionSong,
+                            ));
+                            _activeIndex = _plan.length - 1;
+                          });
+                          _autoSavePlan();
+                        },
+                        hoverColor: t.accentPurple.withValues(alpha: 0.05),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 100),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: isLive
+                                ? t.accentPurple.withValues(alpha: 0.15)
+                                : isSelected
+                                    ? t.accentPurple.withValues(alpha: 0.08)
+                                    : Colors.transparent,
+                            border: Border(
+                              left: BorderSide(
+                                color: isLive
+                                    ? t.accentPurple
+                                    : isSelected
+                                        ? t.accentPurple.withValues(alpha: 0.6)
+                                        : Colors.transparent,
+                                width: 3,
+                              ),
+                              bottom: BorderSide(color: t.border, width: 0.5),
+                            ),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // Section label (Verse 1, Chorus, etc.)
+                                    if (section.hasLabel)
+                                      Text(
+                                        section.label,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: isLive || isSelected
+                                              ? t.accentPurple
+                                              : t.textSecondary,
+                                          letterSpacing: 0.3,
+                                        ),
+                                      ),
+                                    if (section.hasLabel)
+                                      const SizedBox(height: 3),
+                                    // First line(s) of section as preview
+                                    Text(
+                                      section.text,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        height: 1.4,
+                                        color: isLive || isSelected
+                                            ? t.textPrimary
+                                            : t.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (isLive)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 5, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: t.accentPurple,
+                                    borderRadius: BorderRadius.circular(3),
+                                  ),
+                                  child: const Text(
+                                    'LIVE',
+                                    style: TextStyle(
+                                      fontSize: 8,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+
+          // ── Prev / Next + Add Section nav bar ────────────────────────────────
+          _buildOverviewNavBar(
+            accent: t.accentPurple,
+            extraButton: IconButton(
+              icon: Icon(Icons.add_rounded, size: 16, color: t.accentPurple),
+              tooltip: 'Add / edit song',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              onPressed: () => _showSongEditorDialog(song),
+            ),
+            onPrev: sections.isEmpty ? null : () {
+              final cur = sections.indexWhere(
+                  (s) => s.label == _selectedSection?.label && s.text == _selectedSection?.text);
+              final idx = (cur <= 0) ? sections.length - 1 : cur - 1;
+              setState(() => _selectedSection = sections[idx]);
+            },
+            onNext: sections.isEmpty ? null : () {
+              final cur = sections.indexWhere(
+                  (s) => s.label == _selectedSection?.label && s.text == _selectedSection?.text);
+              final idx = (cur < 0 || cur >= sections.length - 1) ? 0 : cur + 1;
+              setState(() => _selectedSection = sections[idx]);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Shared prev/next nav bar for both overview panels ─────────────────────
+  Widget _buildOverviewNavBar({
+    required Color accent,
+    required VoidCallback? onPrev,
+    required VoidCallback? onNext,
+    Widget? extraButton,
+  }) {
+    final t = context.t;
+    return Container(
+      height: 34,
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: t.border)),
+        color: t.surfaceHigh,
+      ),
+      child: Row(
+        children: [
+          if (extraButton != null) ...[
+            const SizedBox(width: 4),
+            extraButton,
+          ],
+          const Spacer(),
+          // Prev button
+          _NavBtn(
+            icon: Icons.chevron_left_rounded,
+            tooltip: 'Previous',
+            accent: accent,
+            enabled: onPrev != null,
+            onTap: onPrev ?? () {},
+          ),
+          const SizedBox(width: 2),
+          // Next button
+          _NavBtn(
+            icon: Icons.chevron_right_rounded,
+            tooltip: 'Next',
+            accent: accent,
+            enabled: onNext != null,
+            onTap: onNext ?? () {},
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
+    );
+  }
+
+  // ── Build the collapsed verse row list (shared by overview + nav) ──────────
+  List<({int startVerse, int endVerse, String text})> _buildVerseRows() {
+    final rows = <({int startVerse, int endVerse, String text})>[];
+    int i = 0;
+    while (i < _verseList.length) {
+      final raw   = (_verseList[i]['text'] as String?) ?? '';
+      final plain = ScriptureQueueItem.toPlain(raw);
+      final startNum = _verseList[i]['verse'] as int;
+      if (plain.isEmpty) { i++; continue; }
+      int endNum = startNum;
+      int j = i + 1;
+      while (j < _verseList.length) {
+        final nxt = ScriptureQueueItem.toPlain(
+            (_verseList[j]['text'] as String?) ?? '');
+        if (nxt.isNotEmpty) break;
+        endNum = _verseList[j]['verse'] as int;
+        j++;
+      }
+      rows.add((startVerse: startNum, endVerse: endNum, text: plain));
+      i = j;
+    }
+    return rows;
+  }
+
+  // ── Song editor dialog ─────────────────────────────────────────────────────
+  void _showSongEditorDialog(Map<String, String>? existingSong) {
+    final titleCtrl  = TextEditingController(text: existingSong?['title']  ?? '');
+    final artistCtrl = TextEditingController(text: existingSong?['artist'] ?? '');
+
+    // Parse existing sections or start with one blank verse
+    final sections = existingSong != null
+        ? parseSongSections(existingSong['lyrics'] ?? '')
+        : [SongSection(label: 'Verse 1', text: '')];
+
+    // Each section gets its own controllers
+    final labelCtrls = sections.map((s) => TextEditingController(text: s.label)).toList();
+    final textCtrls  = sections.map((s) => TextEditingController(text: s.text)).toList();
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setDlg) {
+          final t = context.t;
+
+          void addSection(String label) {
+            setDlg(() {
+              labelCtrls.add(TextEditingController(text: label));
+              textCtrls.add(TextEditingController());
+            });
+          }
+
+          void removeSection(int i) {
+            setDlg(() {
+              labelCtrls.removeAt(i);
+              textCtrls.removeAt(i);
+            });
+          }
+
+          void save() {
+            if (titleCtrl.text.trim().isEmpty) return;
+            // Build lyrics string from sections
+            final buf = StringBuffer();
+            for (int i = 0; i < labelCtrls.length; i++) {
+              final lbl  = labelCtrls[i].text.trim();
+              final body = textCtrls[i].text.trim();
+              if (lbl.isNotEmpty) buf.writeln('[$lbl]');
+              if (body.isNotEmpty) buf.write(body);
+              if (i < labelCtrls.length - 1) buf.write('\n');
+            }
+            final newSong = {
+              'title':  titleCtrl.text.trim(),
+              'artist': artistCtrl.text.trim(),
+              'lyrics': buf.toString(),
+            };
+            setState(() {
+              if (existingSong != null) {
+                final idx = _songs.indexOf(existingSong);
+                if (idx >= 0) _songs[idx] = newSong;
+              } else {
+                _songs.add(newSong);
+              }
+              _filteredSongs = _songs;
+              _selectedSong  = newSong;
+              _selectedSection = null;
+            });
+            Navigator.pop(ctx);
+          }
+
+          return AlertDialog(
+            backgroundColor: t.surface,
+            title: Text(
+              existingSong != null ? 'Edit Song' : 'Add Song',
+              style: TextStyle(color: t.textPrimary, fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            content: SizedBox(
+              width: 560,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Title + Artist row
+                    Row(
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: _DlgField(ctrl: titleCtrl,  label: 'Song title',  t: t),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 2,
+                          child: _DlgField(ctrl: artistCtrl, label: 'Artist / Author', t: t),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Section list
+                    for (int i = 0; i < labelCtrls.length; i++) ...[
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Section label
+                          SizedBox(
+                            width: 110,
+                            child: _DlgField(ctrl: labelCtrls[i], label: 'Label', t: t),
+                          ),
+                          const SizedBox(width: 8),
+                          // Section lyrics
+                          Expanded(
+                            child: _DlgField(
+                              ctrl: textCtrls[i],
+                              label: 'Lyrics',
+                              t: t,
+                              maxLines: 5,
+                            ),
+                          ),
+                          // Remove button
+                          IconButton(
+                            icon: Icon(Icons.remove_circle_outline_rounded,
+                                size: 18, color: t.textMuted),
+                            onPressed: labelCtrls.length > 1
+                                ? () => removeSection(i)
+                                : null,
+                            tooltip: 'Remove section',
+                            padding: const EdgeInsets.only(top: 8),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+
+                    // Quick-add section buttons
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        for (final lbl in ['Verse', 'Chorus', 'Bridge', 'Pre-Chorus', 'Outro', 'Intro'])
+                          ActionChip(
+                            label: Text('+ $lbl',
+                                style: TextStyle(fontSize: 11, color: t.textSecondary)),
+                            backgroundColor: t.surfaceHigh,
+                            side: BorderSide(color: t.border),
+                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                            onPressed: () {
+                              // Auto-number Verses
+                              String label = lbl;
+                              if (lbl == 'Verse') {
+                                final count = labelCtrls
+                                    .where((c) => c.text.startsWith('Verse'))
+                                    .length;
+                                label = 'Verse ${count + 1}';
+                              }
+                              addSection(label);
+                            },
+                          ),
+                        ActionChip(
+                          label: Text('+ Custom',
+                              style: TextStyle(fontSize: 11, color: t.textSecondary)),
+                          backgroundColor: t.surfaceHigh,
+                          side: BorderSide(color: t.border),
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          onPressed: () => addSection(''),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text('Cancel', style: TextStyle(color: t.textMuted)),
+              ),
+              FilledButton(
+                onPressed: save,
+                style: FilledButton.styleFrom(backgroundColor: t.accentPurple),
+                child: Text(existingSong != null ? 'Save' : 'Add Song'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+
 
   Widget _buildOverviewVerseRow({
     required int verseNum,
@@ -1791,6 +2334,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildSongPreview(Map<String, String> song) {
+    final sectionLabel = song['_sectionLabel'];
+    final subtitle = sectionLabel != null && sectionLabel.isNotEmpty
+        ? '$sectionLabel  ·  ${song['artist'] ?? ''}'
+        : 'by ${song['artist'] ?? 'Unknown'}';
     return Padding(
       padding: const EdgeInsets.all(28),
       child: Column(
@@ -1798,9 +2345,11 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           _PreviewHeader(
             title: song['title'] ?? '',
-            subtitle: 'by ${song['artist'] ?? 'Unknown'}',
+            subtitle: subtitle,
             accent: context.t.accentPurple,
-            badgeLabel: 'LYRICS',
+            badgeLabel: sectionLabel != null && sectionLabel.isNotEmpty
+                ? sectionLabel.toUpperCase()
+                : 'LYRICS',
           ),
           const SizedBox(height: 20),
           Expanded(
@@ -1816,7 +2365,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildAnnouncementPreview(ServiceItem item) {
-    final t = context.t;
     return Padding(
       padding: const EdgeInsets.all(28),
       child: Column(
@@ -1982,8 +2530,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildWelcomeScreen() {
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
         children: [
           Container(
             padding: const EdgeInsets.all(24),
@@ -2072,6 +2622,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -3073,6 +3624,108 @@ class _PlanQuickButton extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Prev / Next nav button ─────────────────────────────────────────────────────
+class _NavBtn extends StatefulWidget {
+  const _NavBtn({
+    required this.icon,
+    required this.accent,
+    required this.onTap,
+    required this.enabled,
+    this.tooltip = '',
+  });
+  final IconData icon;
+  final Color accent;
+  final VoidCallback onTap;
+  final bool enabled;
+  final String tooltip;
+
+  @override
+  State<_NavBtn> createState() => _NavBtnState();
+}
+
+class _NavBtnState extends State<_NavBtn> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.t;
+    return Tooltip(
+      message: widget.tooltip,
+      child: MouseRegion(
+        cursor: widget.enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit:  (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          onTap: widget.enabled ? widget.onTap : null,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 80),
+            width: 56,
+            height: 34,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: _hovered && widget.enabled
+                  ? widget.accent.withValues(alpha: 0.15)
+                  : Colors.transparent,
+            ),
+            child: Icon(
+              widget.icon,
+              size: 20,
+              color: widget.enabled
+                  ? (_hovered ? widget.accent : t.textSecondary)
+                  : t.textMuted.withValues(alpha: 0.3),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Dialog text field helper ───────────────────────────────────────────────────
+class _DlgField extends StatelessWidget {
+  const _DlgField({
+    required this.ctrl,
+    required this.label,
+    required this.t,
+    this.maxLines = 1,
+  });
+  final TextEditingController ctrl;
+  final String label;
+  final AppTheme t;
+  final int maxLines;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: ctrl,
+      maxLines: maxLines,
+      style: TextStyle(fontSize: 13, color: t.textPrimary),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: TextStyle(fontSize: 12, color: t.textMuted),
+        filled: true,
+        fillColor: t.appBg,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(6),
+          borderSide: BorderSide(color: t.border),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(6),
+          borderSide: BorderSide(color: t.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(6),
+          borderSide: BorderSide(color: t.accentPurple, width: 1.5),
         ),
       ),
     );
