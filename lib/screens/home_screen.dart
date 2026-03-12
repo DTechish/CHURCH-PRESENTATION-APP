@@ -1,145 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:sqlite3/sqlite3.dart' hide Row;
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import '../app_theme.dart';
+import '../models.dart';
+import 'projector_screen.dart';
 
 const double kPanelWidth = 340.0;
 
 // ── Convenience extension ─────────────────────────────────────────────────────
-// Lets any widget write `context.t` instead of `AppTheme.of(context)`.
 extension _ThemeX on BuildContext {
   AppTheme get t => AppTheme.of(this);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// BIBLE VERSIONS
-//
-// To add a new version:
-//   1. Drop the .SQLite3 file into  assets/database/
-//   2. Register it in pubspec.yaml under flutter › assets
-//   3. Add one line below — that's it.
-//
-// The [fileName] must match the asset path exactly (case-sensitive).
-// The [abbreviation] is shown as the badge in the preview panel.
-// The [fullName] is shown in the version selector tooltip / UI.
-// ─────────────────────────────────────────────────────────────────────────────
-
-class BibleVersion {
-  const BibleVersion({
-    required this.abbreviation,
-    required this.fullName,
-    required this.fileName,
-  });
-
-  /// Short label shown on buttons and preview badges — e.g. "AMP", "KJV".
-  final String abbreviation;
-
-  /// Full human-readable name — e.g. "Amplified Bible".
-  final String fullName;
-
-  /// Asset filename inside  assets/database/ — e.g. "AMP.SQLite3".
-  final String fileName;
-
-  /// Full Flutter asset path used with [rootBundle.load].
-  String get assetPath => 'assets/database/$fileName';
-}
-
-/// ── ADD NEW VERSIONS HERE ───────────────────────────────────────────────────
-///
-/// Order determines the display order in the selector.
-const List<BibleVersion> kBibleVersions = [
-  BibleVersion(
-    abbreviation: 'AMP',
-    fullName: 'Amplified Bible',
-    fileName: 'AMP.SQLite3',
-  ),
-  BibleVersion(
-    abbreviation: 'ESV',
-    fullName: 'English Standard Version',
-    fileName: 'ESVGSB.SQLite3',
-  ),
-  BibleVersion(
-    abbreviation: 'NASB',
-    fullName: 'New American Standard Bible',
-    fileName: 'NASU.SQLite3',
-  ),
-  // ↓ Uncomment (or add) as you drop new .SQLite3 files into assets/database/
-  // BibleVersion(
-  //   abbreviation: 'KJV',
-  //   fullName: 'King James Version',
-  //   fileName: 'KJV.SQLite3',
-  // ),
-  // BibleVersion(
-  //   abbreviation: 'NIV',
-  //   fullName: 'New International Version',
-  //   fileName: 'NIV.SQLite3',
-  // ),
-  // BibleVersion(
-  //   abbreviation: 'NKJV',
-  //   fullName: 'New King James Version',
-  //   fileName: 'NKJV.SQLite3',
-  // ),
-  // BibleVersion(
-  //   abbreviation: 'NLT',
-  //   fullName: 'New Living Translation',
-  //   fileName: 'NLT.SQLite3',
-  // ),
-];
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DATA MODEL
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// One item in the scripture queue.
-/// Stores everything needed to display it in the preview panel,
-/// including which Bible version it came from.
-class ScriptureQueueItem {
-  ScriptureQueueItem({
-    required this.book,
-    required this.chapter,
-    required this.startVerse,
-    required this.endVerse,
-    required this.verses,
-    required this.version,
-  });
-
-  final String book;
-  final int chapter;
-  final int startVerse;
-  final int endVerse;
-
-  /// Raw verse rows from the DB: [{verse: int, text: String}, ...]
-  final List<Map<String, dynamic>> verses;
-
-  /// The Bible version this passage was taken from.
-  final BibleVersion version;
-
-  /// e.g. "John 3:16" or "John 3:16–18"
-  String get reference => startVerse == endVerse
-      ? '$book $chapter:$startVerse'
-      : '$book $chapter:$startVerse–$endVerse';
-
-  /// All verse texts joined, with verse numbers as inline labels.
-  /// HTML tags (e.g. <pb/>, <n>…</n>, <i>…</i> from the AMP) are stripped.
-  String get fullText =>
-      verses.map((v) => '${v['verse']}  ${_stripHtml(v['text'] as String? ?? '')}').join('\n\n');
-
-  /// Strip XML/HTML tags and decode common entities from Bible DB text.
-  static String _stripHtml(String raw) {
-    // Remove all tags like <pb/>, <n>, </n>, <i>, <br>, etc.
-    String s = raw.replaceAll(RegExp(r'<[^>]*>'), '');
-    // Decode common HTML entities
-    s = s
-        .replaceAll('&amp;', '&')
-        .replaceAll('&lt;', '<')
-        .replaceAll('&gt;', '>')
-        .replaceAll('&quot;', '"')
-        .replaceAll('&#39;', "'")
-        .replaceAll('&nbsp;', ' ');
-    // Collapse multiple spaces / trim
-    return s.replaceAll(RegExp(r'  +'), ' ').trim();
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -533,8 +406,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<String> _bibleBooks = [];
   final Map<String, int> _bookNumberMap = {};
+  // Reverse map: book_number → display name (rebuilt on each version load)
+  final Map<int, String> _bookByNumber = {};
 
   String? _selectedBook;
+  // Stable cross-version identity — survives book name changes between versions
+  int? _selectedBookNumber;
   List<int> _chapters = [];
 
   int? _selectedChapter;
@@ -554,12 +431,27 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Approximate height of each verse row in the overview panel (px).
   static const double _kVerseRowHeight = 52.0;
 
-  // ── Scripture queue ────────────────────────────────────────────────────────
+  // ── Service plan ───────────────────────────────────────────────────────────
 
-  final List<ScriptureQueueItem> _queue = [];
-  ScriptureQueueItem? _activeQueueItem;
+  final List<ServiceItem> _plan = [];
+  int _activeIndex = -1; // index into _plan; -1 = nothing live
 
-  // ── Songs ──────────────────────────────────────────────────────────────────
+  ServiceItem? get _activeItem =>
+      _activeIndex >= 0 && _activeIndex < _plan.length
+          ? _plan[_activeIndex]
+          : null;
+
+  // Derived convenience getters used by preview / projector
+  ScriptureQueueItem? get _activeQueueItem =>
+      _activeItem?.type == ServiceItemType.scripture
+          ? _activeItem!.scriptureItem
+          : null;
+
+  Map<String, String>? get _activeSong =>
+      _activeItem?.type == ServiceItemType.song ? _activeItem!.song : null;
+
+  // Auto-save
+  static const _kAutoSaveFileName = 'service_plan.json';
 
   final List<Map<String, String>> _songs = [
     {
@@ -592,7 +484,9 @@ class _HomeScreenState extends State<HomeScreen> {
   ];
 
   late List<Map<String, String>> _filteredSongs;
-  Map<String, String>? _activeSong;
+
+  // ── Keyboard focus ─────────────────────────────────────────────────────────
+  final FocusNode _keyboardFocus = FocusNode();
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -602,8 +496,8 @@ class _HomeScreenState extends State<HomeScreen> {
     _searchController = TextEditingController();
     _songSearchController = TextEditingController();
     _filteredSongs = _songs;
-    // Load the first version on startup
     _loadVersion(kBibleVersions.first, isInitialLoad: true);
+    _loadServicePlan();
   }
 
   @override
@@ -611,6 +505,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _searchController.dispose();
     _songSearchController.dispose();
     _verseOverviewScroll.dispose();
+    _keyboardFocus.dispose();
     _database?.dispose();
     super.dispose();
   }
@@ -623,41 +518,54 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     if (!_initialLoadDone) return _buildFullScreenLoader();
 
-    return Row(
-      children: [
-        // ── Col 1: Scripture pickers + Song list (fixed 300px) ───────────────
-        SizedBox(
-          width: kPanelWidth,
-          child: Container(
-            color: context.t.surface,
-            child: Column(
-              children: [
-                Expanded(child: _buildScripturePanel()),
-                Divider(color: context.t.border, height: 1, thickness: 1),
-                Expanded(child: _buildSongPanel()),
-              ],
+    return KeyboardListener(
+      focusNode: _keyboardFocus,
+      autofocus: true,
+      onKeyEvent: _handleKeyEvent,
+      child: Row(
+        children: [
+          // ── Col 1: Scripture pickers + Song list (fixed 300px) ───────────────
+          SizedBox(
+            width: kPanelWidth,
+            child: Container(
+              color: context.t.surface,
+              child: Column(
+                children: [
+                  Expanded(child: _buildScripturePanel()),
+                  Divider(color: context.t.border, height: 1, thickness: 1),
+                  Expanded(child: _buildSongPanel()),
+                ],
+              ),
             ),
           ),
-        ),
 
-        VerticalDivider(width: 1, color: context.t.border),
+          VerticalDivider(width: 1, color: context.t.border),
 
-        // ── Col 2: Chapter verse overview — always visible (fixed 240px) ─────
-        SizedBox(
-          width: 240,
-          child: _buildChapterOverviewPanel(),
-        ),
-
-        VerticalDivider(width: 1, color: context.t.border),
-
-        // ── Col 3: Main display — scripture/song preview or welcome ──────────
-        Expanded(
-          child: Container(
-            color: context.t.appBg,
-            child: _buildDisplaySection(),
+          // ── Col 2: Chapter verse overview — always visible (fixed 240px) ─────
+          SizedBox(
+            width: 240,
+            child: _buildChapterOverviewPanel(),
           ),
-        ),
-      ],
+
+          VerticalDivider(width: 1, color: context.t.border),
+
+          // ── Col 3: Operator preview (top) + Service Plan (bottom) ────────────
+          Expanded(
+            child: Container(
+              color: context.t.appBg,
+              child: Column(
+                children: [
+                  Expanded(
+                    flex: 6,
+                    child: _buildDisplaySection(),
+                  ),
+                  _buildServicePlanPanel(),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -700,7 +608,6 @@ class _HomeScreenState extends State<HomeScreen> {
         _buildPassagePicker(),
         // Version library fills all remaining space below the pickers
         Expanded(child: _buildVersionLibrary()),
-        if (_queue.isNotEmpty) _buildQueueStrip(),
       ],
     );
   }
@@ -1081,45 +988,341 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ── Zone 6: Queue strip ────────────────────────────────────────────────────
 
-  Widget _buildQueueStrip() {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // COL 3 — QUEUE PANEL  (bottom half of the operator column)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SERVICE PLAN PANEL  (bottom of col 3)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  final ScrollController _planScroll = ScrollController();
+
+  Widget _buildServicePlanPanel() {
+    final t = context.t;
     return Container(
-      height: 72,
+      height: 260,
       decoration: BoxDecoration(
-        color: context.t.appBg,
-        border: Border(top: BorderSide(color: context.t.border)),
+        color: t.surface,
+        border: Border(top: BorderSide(color: t.border, width: 1.5)),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 5, 12, 0),
-            child: Text(
-              'QUEUE  ·  ${_queue.length} item${_queue.length == 1 ? '' : 's'}',
-              style: TextStyle(
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                color: context.t.textMuted,
-                letterSpacing: 0.8,
+          // ── Header ──────────────────────────────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: t.surfaceHigh,
+              border: Border(bottom: BorderSide(color: t.border)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.format_list_numbered_rounded, size: 13, color: t.textMuted),
+                const SizedBox(width: 6),
+                Text(
+                  'SERVICE PLAN',
+                  style: TextStyle(
+                    fontSize: 9, fontWeight: FontWeight.w700,
+                    color: t.textMuted, letterSpacing: 1.2,
+                  ),
+                ),
+                if (_plan.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: t.accentBlue.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '${_plan.length}',
+                      style: TextStyle(fontSize: 9, color: t.accentBlue, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+                const Spacer(),
+
+                // Quick-action: Black screen
+                _PlanQuickButton(
+                  icon: Icons.circle,
+                  label: 'Black',
+                  color: const Color(0xFF777777),
+                  onTap: _addBlackScreen,
+                ),
+                const SizedBox(width: 6),
+                // Quick-action: Logo slide
+                _PlanQuickButton(
+                  icon: Icons.church_rounded,
+                  label: 'Logo',
+                  color: const Color(0xFF4CAF50),
+                  onTap: _addLogoSlide,
+                ),
+                const SizedBox(width: 6),
+                // Add announcement
+                _PlanQuickButton(
+                  icon: Icons.campaign_rounded,
+                  label: 'Announce',
+                  color: const Color(0xFFE6A817),
+                  onTap: _showAnnouncementDialog,
+                ),
+                const SizedBox(width: 6),
+                // Clear whole plan
+                if (_plan.isNotEmpty)
+                  _PlanQuickButton(
+                    icon: Icons.delete_sweep_rounded,
+                    label: 'Clear all',
+                    color: t.textMuted,
+                    onTap: _confirmClearPlan,
+                  ),
+              ],
+            ),
+          ),
+
+          // ── Nav bar: prev / position / next ─────────────────────────────────
+          if (_plan.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: t.border)),
+              ),
+              child: Row(
+                children: [
+                  _navButton(
+                    icon: Icons.skip_previous_rounded,
+                    onTap: _activeIndex > 0 ? _stepBack : null,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _activeIndex < 0
+                        ? 'Not live'
+                        : '${_activeIndex + 1} / ${_plan.length}',
+                    style: TextStyle(fontSize: 10, color: t.textSecondary),
+                  ),
+                  const SizedBox(width: 8),
+                  _navButton(
+                    icon: Icons.skip_next_rounded,
+                    onTap: _activeIndex < _plan.length - 1 ? _stepForward : null,
+                  ),
+                  const Spacer(),
+                  // "Go Live" shortcut for current preview
+                  if (_activeItem != null)
+                    GestureDetector(
+                      onTap: _goLive,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: t.accentBlue.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: t.accentBlue.withValues(alpha: 0.4)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.cast_rounded, size: 11, color: t.accentBlue),
+                            const SizedBox(width: 5),
+                            Text(
+                              'Go Live',
+                              style: TextStyle(
+                                fontSize: 10, fontWeight: FontWeight.w700,
+                                color: t.accentBlue,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
-          ),
+
+          // ── Plan list ────────────────────────────────────────────────────────
           Expanded(
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              itemCount: _queue.length,
-              itemBuilder: (context, index) {
-                final item = _queue[index];
-                return _QueueCard(
-                  item: item,
-                  isActive: item == _activeQueueItem,
-                  onTap: () => _previewQueueItem(item),
-                  onRemove: () => _removeFromQueue(index),
-                );
-              },
-            ),
+            child: _plan.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.playlist_add_rounded, size: 28, color: t.textMuted),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Service plan is empty',
+                          style: TextStyle(fontSize: 12, color: t.textMuted),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          'Add scripture, songs, announcements or logo slides',
+                          style: TextStyle(fontSize: 10, color: t.textMuted),
+                        ),
+                      ],
+                    ),
+                  )
+                : ReorderableListView.builder(
+                    scrollController: _planScroll,
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    itemCount: _plan.length,
+                    onReorder: (oldIndex, newIndex) {
+                      setState(() {
+                        if (newIndex > oldIndex) newIndex--;
+                        final item = _plan.removeAt(oldIndex);
+                        _plan.insert(newIndex, item);
+                        // Keep _activeIndex tracking the same item
+                        if (_activeIndex == oldIndex) {
+                          _activeIndex = newIndex;
+                        } else if (oldIndex < _activeIndex && newIndex >= _activeIndex) {
+                          _activeIndex--;
+                        } else if (oldIndex > _activeIndex && newIndex <= _activeIndex) {
+                          _activeIndex++;
+                        }
+                      });
+                      _autoSavePlan();
+                    },
+                    itemBuilder: (context, index) => _buildPlanRow(index),
+                  ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _navButton({required IconData icon, VoidCallback? onTap}) {
+    final t = context.t;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: onTap != null
+              ? t.accentBlue.withValues(alpha: 0.1)
+              : t.surfaceHigh,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Icon(
+          icon,
+          size: 14,
+          color: onTap != null ? t.accentBlue : t.textMuted,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPlanRow(int index) {
+    final t = context.t;
+    final item = _plan[index];
+    final isActive = index == _activeIndex;
+    final isDone = _activeIndex >= 0 && index < _activeIndex;
+    final accent = item.accentColor(t);
+
+    return InkWell(
+      key: ValueKey(item.id),
+      onTap: () => _selectPlanItem(index),
+      hoverColor: accent.withValues(alpha: 0.05),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: isActive ? accent.withValues(alpha: 0.1) : Colors.transparent,
+          border: Border(
+            left: BorderSide(
+              color: isActive ? accent : Colors.transparent,
+              width: 3,
+            ),
+            bottom: BorderSide(color: t.border.withValues(alpha: 0.5)),
+          ),
+        ),
+        child: Row(
+          children: [
+            // Drag handle
+            Icon(Icons.drag_indicator_rounded, size: 13, color: t.textMuted),
+            const SizedBox(width: 6),
+
+            // Type icon
+            Container(
+              width: 26,
+              height: 26,
+              decoration: BoxDecoration(
+                color: isActive
+                    ? accent.withValues(alpha: 0.2)
+                    : t.surfaceHigh,
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Icon(
+                item.icon,
+                size: 13,
+                color: isDone
+                    ? t.textMuted
+                    : isActive
+                        ? accent
+                        : accent.withValues(alpha: 0.7),
+              ),
+            ),
+            const SizedBox(width: 10),
+
+            // Title + subtitle
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.title,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                      color: isDone
+                          ? t.textMuted
+                          : isActive
+                              ? accent
+                              : t.textPrimary,
+                      decoration: isDone ? TextDecoration.lineThrough : null,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (item.subtitle.isNotEmpty)
+                    Text(
+                      item.subtitle,
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: isDone ? t.textMuted : t.textSecondary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              ),
+            ),
+
+            // Live badge
+            if (isActive) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: Text(
+                  'LIVE',
+                  style: TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.w800,
+                    color: accent,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+            ],
+
+            // Remove
+            GestureDetector(
+              onTap: () => _removePlanItem(index),
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Icon(Icons.close_rounded, size: 12, color: t.textMuted),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1190,9 +1393,19 @@ class _HomeScreenState extends State<HomeScreen> {
                       Divider(color: context.t.border, height: 1),
                   itemBuilder: (context, index) {
                     final song = _filteredSongs[index];
-                    final isActive = _activeSong == song;
+                    final isActive = _activeItem?.type == ServiceItemType.song &&
+                        _activeItem?.song?['title'] == song['title'];
                     return InkWell(
-                      onDoubleTap: () => setState(() => _activeSong = song),
+                      onDoubleTap: () {
+                        setState(() {
+                          _plan.add(ServiceItem(
+                            type: ServiceItemType.song,
+                            song: song,
+                          ));
+                          _activeIndex = _plan.length - 1;
+                        });
+                        _autoSavePlan();
+                      },
                       hoverColor: context.t.accentPurple.withValues(
                         alpha: 0.06,
                       ),
@@ -1268,12 +1481,21 @@ class _HomeScreenState extends State<HomeScreen> {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Widget _buildDisplaySection() {
-    if (_activeQueueItem == null && _activeSong == null) {
-      return _buildWelcomeScreen();
+    final item = _activeItem;
+    if (item == null) return _buildWelcomeScreen();
+
+    switch (item.type) {
+      case ServiceItemType.scripture:
+        return _buildScripturePreview(item.scriptureItem!);
+      case ServiceItemType.song:
+        return _buildSongPreview(item.song!);
+      case ServiceItemType.announcement:
+        return _buildAnnouncementPreview(item);
+      case ServiceItemType.logo:
+        return _buildLogoPreview();
+      case ServiceItemType.black:
+        return _buildBlackPreview();
     }
-    return _activeQueueItem != null
-        ? _buildScripturePreview(_activeQueueItem!)
-        : _buildSongPreview(_activeSong!);
   }
 
 
@@ -1361,22 +1583,43 @@ class _HomeScreenState extends State<HomeScreen> {
                       ],
                     ),
                   )
-                : ListView.builder(
-                    controller: _verseOverviewScroll,
-                    padding: EdgeInsets.zero,
-                    itemCount: _verseList.length,
-                    itemExtent: _kVerseRowHeight,
-                    itemBuilder: (context, index) {
-                      final verseNum =
-                          _verseList[index]['verse'] as int;
-                      final verseText = ScriptureQueueItem._stripHtml(
-                  (_verseList[index]['text'] as String?) ?? '');
-                      return _buildOverviewVerseRow(
-                        verseNum: verseNum,
-                        verseText: verseText,
-                      );
-                    },
-                  ),
+                : Builder(builder: (context) {
+                    // Build a collapsed list: skip empty verses (MSG), show range labels
+                    final rows = <({int startVerse, int endVerse, String text})>[];
+                    int i = 0;
+                    while (i < _verseList.length) {
+                      final raw = (_verseList[i]['text'] as String?) ?? '';
+                      final plain = ScriptureQueueItem.toPlain(raw);
+                      final startNum = _verseList[i]['verse'] as int;
+                      if (plain.isEmpty) { i++; continue; } // skip empty slots
+                      // Collect any following empty verses into this range
+                      int endNum = startNum;
+                      int j = i + 1;
+                      while (j < _verseList.length) {
+                        final nextPlain = ScriptureQueueItem.toPlain(
+                            (_verseList[j]['text'] as String?) ?? '');
+                        if (nextPlain.isNotEmpty) break;
+                        endNum = _verseList[j]['verse'] as int;
+                        j++;
+                      }
+                      rows.add((startVerse: startNum, endVerse: endNum, text: plain));
+                      i = j;
+                    }
+                    return ListView.builder(
+                      controller: _verseOverviewScroll,
+                      padding: EdgeInsets.zero,
+                      itemCount: rows.length,
+                      itemExtent: _kVerseRowHeight,
+                      itemBuilder: (context, index) {
+                        final row = rows[index];
+                        return _buildOverviewVerseRow(
+                          verseNum: row.startVerse,
+                          endVerseNum: row.endVerse,
+                          verseText: row.text,
+                        );
+                      },
+                    );
+                  }),
           ),
 
           // ── Footer hint ─────────────────────────────────────────────────────
@@ -1399,17 +1642,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildOverviewVerseRow({
     required int verseNum,
+    int? endVerseNum,         // non-null when MSG combines e.g. v16–18
     required String verseText,
   }) {
     final t = context.t;
     final bool isFrom = verseNum == _pickerFromVerse;
-    final bool isTo = verseNum == _pickerToVerse;
+    final bool isTo = verseNum == _pickerToVerse ||
+        (endVerseNum != null && endVerseNum == _pickerToVerse);
     final bool isEdge = isFrom || isTo;
     final bool inRange = _pickerFromVerse != null &&
         _pickerToVerse != null &&
         verseNum >= _pickerFromVerse! &&
-        verseNum <= _pickerToVerse!;
+        (endVerseNum ?? verseNum) <= _pickerToVerse!;
     final bool isSingle = isFrom && _pickerFromVerse == _pickerToVerse;
+
+    final displayLabel = (endVerseNum != null && endVerseNum > verseNum)
+        ? '$verseNum–$endVerseNum'
+        : '$verseNum';
 
     final Color bg = isEdge || isSingle
         ? t.anchorHighlight
@@ -1422,14 +1671,14 @@ class _HomeScreenState extends State<HomeScreen> {
       onTap: () {
         setState(() {
           _pickerFromVerse = verseNum;
-          _pickerToVerse = verseNum;
+          _pickerToVerse = endVerseNum ?? verseNum;
         });
       },
       // Double tap → queue and display immediately
       onDoubleTap: () {
         setState(() {
           _pickerFromVerse = verseNum;
-          _pickerToVerse = verseNum;
+          _pickerToVerse = endVerseNum ?? verseNum;
         });
         _addPickerSelectionToQueue();
       },
@@ -1452,11 +1701,11 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Verse number badge
+            // Verse number / range badge
             SizedBox(
-              width: 24,
+              width: 32,
               child: Text(
-                '$verseNum',
+                displayLabel,
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w700,
@@ -1518,26 +1767,24 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildScripturePreview(ScriptureQueueItem item) {
     return Padding(
-      padding: const EdgeInsets.all(32),
+      padding: const EdgeInsets.all(28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _PreviewHeader(
             title: item.reference,
-            // Show full version name in the subtitle
             subtitle: item.version.fullName,
             accent: context.t.accentBlue,
-            // Show abbreviation in the badge
             badgeLabel: item.version.abbreviation,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
           Expanded(
             child: _PreviewTextCard(
-              text: item.fullText,
+              richText: item.buildRichText,
               textAlign: TextAlign.left,
             ),
           ),
-          _buildPreviewFooter(),
+          _buildGoLiveBar(accent: context.t.accentBlue),
         ],
       ),
     );
@@ -1545,7 +1792,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildSongPreview(Map<String, String> song) {
     return Padding(
-      padding: const EdgeInsets.all(32),
+      padding: const EdgeInsets.all(28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1555,33 +1802,179 @@ class _HomeScreenState extends State<HomeScreen> {
             accent: context.t.accentPurple,
             badgeLabel: 'LYRICS',
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
           Expanded(
             child: _PreviewTextCard(
               text: song['lyrics'] ?? '',
               textAlign: TextAlign.center,
             ),
           ),
-          _buildPreviewFooter(),
+          _buildGoLiveBar(accent: context.t.accentPurple),
         ],
       ),
     );
   }
 
-  Widget _buildPreviewFooter() {
+  Widget _buildAnnouncementPreview(ServiceItem item) {
+    final t = context.t;
+    return Padding(
+      padding: const EdgeInsets.all(28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _PreviewHeader(
+            title: item.announcementTitle?.isNotEmpty == true
+                ? item.announcementTitle!
+                : 'Announcement',
+            subtitle: 'Custom slide',
+            accent: const Color(0xFFE6A817),
+            badgeLabel: 'ANNOUNCE',
+          ),
+          const SizedBox(height: 20),
+          Expanded(
+            child: _PreviewTextCard(
+              text: item.announcementText ?? '',
+              textAlign: TextAlign.center,
+            ),
+          ),
+          _buildGoLiveBar(accent: const Color(0xFFE6A817)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLogoPreview() {
+    final t = context.t;
+    return Padding(
+      padding: const EdgeInsets.all(28),
+      child: Column(
+        children: [
+          _PreviewHeader(
+            title: 'Church Logo',
+            subtitle: 'Branded slide',
+            accent: const Color(0xFF4CAF50),
+            badgeLabel: 'LOGO',
+          ),
+          const SizedBox(height: 20),
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: t.border),
+              ),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.church_rounded, size: 64, color: Colors.white.withValues(alpha: 0.3)),
+                    const SizedBox(height: 16),
+                    Text(
+                      'CHURCH LOGO',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white.withValues(alpha: 0.2),
+                        letterSpacing: 2,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Add your logo image in settings',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white.withValues(alpha: 0.15),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          _buildGoLiveBar(accent: const Color(0xFF4CAF50)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBlackPreview() {
+    final t = context.t;
+    return Padding(
+      padding: const EdgeInsets.all(28),
+      child: Column(
+        children: [
+          _PreviewHeader(
+            title: 'Black Screen',
+            subtitle: 'Clear projector output',
+            accent: const Color(0xFF777777),
+            badgeLabel: 'BLACK',
+          ),
+          const SizedBox(height: 20),
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: t.border),
+              ),
+            ),
+          ),
+          _buildGoLiveBar(accent: const Color(0xFF777777)),
+        ],
+      ),
+    );
+  }
+
+  /// Action bar shown below the preview — Go Live + Clear buttons.
+  Widget _buildGoLiveBar({bool? isScripture, Color? accent}) {
+    final t = context.t;
+    final a = accent ??
+        (isScripture == true ? t.accentBlue : t.accentPurple);
     return Padding(
       padding: const EdgeInsets.only(top: 16),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Container(width: 24, height: 1, color: context.t.border),
-          const SizedBox(width: 10),
-          Text(
-            'Church Presentation Software',
-            style: TextStyle(fontSize: 11, color: context.t.textMuted),
+          // Go Live button — opens/updates the projector window
+          Expanded(
+            child: FilledButton.icon(
+              onPressed: _goLive,
+              style: FilledButton.styleFrom(
+                backgroundColor: a,
+                foregroundColor: t.isDark ? t.appBg : Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              icon: const Icon(Icons.cast_rounded, size: 17),
+              label: const Text(
+                'Go Live',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ),
           ),
           const SizedBox(width: 10),
-          Container(width: 24, height: 1, color: context.t.border),
+          // Clear projector — blanks the screen
+          OutlinedButton.icon(
+            onPressed: _clearProjector,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: t.textSecondary,
+              side: BorderSide(color: t.border),
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            icon: const Icon(Icons.stop_screen_share_rounded, size: 16),
+            label: const Text(
+              'Clear',
+              style: TextStyle(fontSize: 12),
+            ),
+          ),
         ],
       ),
     );
@@ -1731,30 +2124,34 @@ class _HomeScreenState extends State<HomeScreen> {
         for (final r in bookRows)
           r['long_name'] as String: r['book_number'] as int,
       };
+      // Reverse map: number → name (so we can remap _selectedBook after switch)
+      final Map<int, String> byNumber = {
+        for (final r in bookRows)
+          r['book_number'] as int: r['long_name'] as String,
+      };
 
-      // Step 5 — If a chapter was already selected, re-query its verses from
-      //          the new DB so the verse list shows the new translation text.
-      //          We snapshot the current selections before setState so we can
-      //          use them inside the callback safely.
-      final String? currentBook = _selectedBook;
+      // Step 5 — Re-query verses using the STABLE book_number, not the name.
+      //          This is what fixes NKJV whose long_names differ from every
+      //          other version (e.g. "The First Book of Moses Called GENESIS").
+      final int? currentBookNum = _selectedBookNumber;
       final int? currentChapter = _selectedChapter;
       List<Map<String, dynamic>> newVerseList = [];
+      // The display name for _selectedBook in the new version
+      String? remappedBookName =
+          currentBookNum != null ? byNumber[currentBookNum] : null;
 
-      if (currentBook != null && currentChapter != null) {
-        final bookNumber = bookMap[currentBook];
-        if (bookNumber != null) {
-          try {
-            final verseRows = db.select(
-              'SELECT verse, text FROM verses '
-              'WHERE book_number = ? AND chapter = ? ORDER BY verse',
-              [bookNumber, currentChapter],
-            );
-            newVerseList = verseRows
-                .map((r) => {'verse': r['verse'], 'text': r['text']})
-                .toList();
-          } catch (e) {
-            debugPrint('❌ Re-query verses on switch: $e');
-          }
+      if (currentBookNum != null && currentChapter != null) {
+        try {
+          final verseRows = db.select(
+            'SELECT verse, text FROM verses '
+            'WHERE book_number = ? AND chapter = ? ORDER BY verse',
+            [currentBookNum, currentChapter],
+          );
+          newVerseList = verseRows
+              .map((r) => {'verse': r['verse'], 'text': r['text']})
+              .toList();
+        } catch (e) {
+          debugPrint('❌ Re-query verses on switch: $e');
         }
       }
 
@@ -1765,11 +2162,14 @@ class _HomeScreenState extends State<HomeScreen> {
         _bookNumberMap
           ..clear()
           ..addAll(bookMap);
+        _bookByNumber
+          ..clear()
+          ..addAll(byNumber);
 
-        // ── Preserve everything the user had selected ──────────────────────
-        // _selectedBook, _selectedChapter, _chapters all stay as they were.
-        // Only the verse *text* is refreshed
-        // because it comes from the new translation.
+        // Remap _selectedBook to whatever this version calls the same book
+        if (remappedBookName != null) _selectedBook = remappedBookName;
+
+        // Verse list refreshed with new translation text
         _verseList = newVerseList;
 
         _versionLoading = false;
@@ -1817,6 +2217,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       setState(() {
         _selectedBook = book;
+        _selectedBookNumber = bookNumber; // stable cross-version identity
         _chapters = rows.map((r) => r['chapter'] as int).toList();
         _selectedChapter = null;
         _verseList = [];
@@ -1884,24 +2285,287 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     setState(() {
-      _queue.add(item);
-      _activeQueueItem = item;
-      _activeSong = null;
+      final si = ServiceItem(type: ServiceItemType.scripture, scriptureItem: item);
+      _plan.add(si);
+      _activeIndex = _plan.length - 1;
+    });
+    _autoSavePlan();
+  }
+
+  // ── Service plan item management ────────────────────────────────────────────
+
+  void _selectPlanItem(int index) {
+    setState(() => _activeIndex = index);
+    _scrollPlanToIndex(index);
+  }
+
+  void _removePlanItem(int index) {
+    setState(() {
+      _plan.removeAt(index);
+      if (_activeIndex >= _plan.length) {
+        _activeIndex = _plan.length - 1;
+      }
+    });
+    _autoSavePlan();
+  }
+
+  void _stepForward() {
+    if (_activeIndex < _plan.length - 1) {
+      setState(() => _activeIndex++);
+      _scrollPlanToIndex(_activeIndex);
+    }
+  }
+
+  void _stepBack() {
+    if (_activeIndex > 0) {
+      setState(() => _activeIndex--);
+      _scrollPlanToIndex(_activeIndex);
+    }
+  }
+
+  void _addBlackScreen() {
+    setState(() {
+      _plan.add(ServiceItem(type: ServiceItemType.black));
+      _activeIndex = _plan.length - 1;
+    });
+    _autoSavePlan();
+  }
+
+  void _addLogoSlide() {
+    setState(() {
+      _plan.add(ServiceItem(type: ServiceItemType.logo));
+      _activeIndex = _plan.length - 1;
+    });
+    _autoSavePlan();
+  }
+
+  void _confirmClearPlan() {
+    showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Clear service plan?'),
+        content: const Text('This will remove all items. This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    ).then((confirmed) {
+      if (confirmed == true) {
+        setState(() { _plan.clear(); _activeIndex = -1; });
+        _autoSavePlan();
+      }
     });
   }
 
-  void _previewQueueItem(ScriptureQueueItem item) => setState(() {
-    _activeQueueItem = item;
-    _activeSong = null;
-  });
+  void _showAnnouncementDialog() {
+    final titleCtrl = TextEditingController();
+    final bodyCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Add Announcement'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: titleCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Title (optional)',
+                hintText: 'e.g. Sunday School',
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: bodyCtrl,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                labelText: 'Announcement text',
+                hintText: 'Enter text to display on screen',
+                alignLabelWithHint: true,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (bodyCtrl.text.trim().isNotEmpty) {
+                setState(() {
+                  _plan.add(ServiceItem(
+                    type: ServiceItemType.announcement,
+                    announcementTitle: titleCtrl.text.trim(),
+                    announcementText: bodyCtrl.text.trim(),
+                  ));
+                  _activeIndex = _plan.length - 1;
+                });
+                _autoSavePlan();
+              }
+              Navigator.pop(context);
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
 
-  void _removeFromQueue(int index) {
-    setState(() {
-      final removed = _queue.removeAt(index);
-      if (_activeQueueItem == removed) {
-        _activeQueueItem = _queue.isNotEmpty ? _queue.last : null;
+  void _scrollPlanToIndex(int index) {
+    if (!_planScroll.hasClients) return;
+    const rowH = 52.0;
+    _planScroll.animateTo(
+      (index * rowH).clamp(0.0, _planScroll.position.maxScrollExtent),
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+    );
+  }
+
+  // ── Projector output ────────────────────────────────────────────────────────
+
+  bool _projectorOpen = false;
+
+  void _goLive() {
+    if (_activeItem == null) return;
+    final item = _activeItem!;
+
+    // For black screen items, just clear the projector
+    if (item.type == ServiceItemType.black) {
+      _clearProjector();
+      return;
+    }
+
+    if (!_projectorOpen) {
+      setState(() => _projectorOpen = true);
+      Navigator.of(context).push(
+        PageRouteBuilder(
+          opaque: true,
+          barrierColor: Colors.black,
+          pageBuilder: (_, _, _) => ProjectorScreen(
+            queueItem: _activeQueueItem,
+            song: _activeSong,
+            announcement: item.type == ServiceItemType.announcement ? item : null,
+            showLogo: item.type == ServiceItemType.logo,
+          ),
+          transitionDuration: const Duration(milliseconds: 300),
+          transitionsBuilder: (_, anim, _, child) =>
+              FadeTransition(opacity: anim, child: child),
+        ),
+      ).then((_) => setState(() => _projectorOpen = false));
+    } else {
+      ProjectorNotifier.instance.update(
+        queueItem: _activeQueueItem,
+        song: _activeSong,
+        announcement: item.type == ServiceItemType.announcement ? item : null,
+        showLogo: item.type == ServiceItemType.logo,
+      );
+    }
+  }
+
+  void _clearProjector() {
+    ProjectorNotifier.instance.clear();
+  }
+
+  // ── Keyboard navigation ─────────────────────────────────────────────────────
+
+  void _handleKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return;
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowDown) {
+      _stepForward();
+    } else if (key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowUp) {
+      _stepBack();
+    } else if (key == LogicalKeyboardKey.space) {
+      _goLive();
+    } else if (key == LogicalKeyboardKey.keyB) {
+      _clearProjector();
+    }
+  }
+
+  // ── Auto-save / restore ─────────────────────────────────────────────────────
+
+  Future<String> get _savePath async {
+    final dir = await getApplicationDocumentsDirectory();
+    final folder = Directory('${dir.path}/ChurchPresenter');
+    if (!folder.existsSync()) folder.createSync(recursive: true);
+    return '${folder.path}/$_kAutoSaveFileName';
+  }
+
+  Future<void> _autoSavePlan() async {
+    try {
+      final path = await _savePath;
+      final data = {
+        'savedAt': DateTime.now().toIso8601String(),
+        'activeIndex': _activeIndex,
+        'items': _plan.map((e) => e.toJson()).toList(),
+      };
+      await File(path).writeAsString(jsonEncode(data));
+    } catch (e) {
+      debugPrint('Auto-save failed: $e');
+    }
+  }
+
+  Future<void> _loadServicePlan() async {
+    try {
+      final path = await _savePath;
+      final file = File(path);
+      if (!file.existsSync()) return;
+      final raw = await file.readAsString();
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      final items = (data['items'] as List)
+          .map((e) => ServiceItem.fromJson(Map<String, dynamic>.from(e as Map)))
+          .whereType<ServiceItem>()
+          .toList();
+      if (items.isEmpty) return;
+      final savedAt = DateTime.tryParse(data['savedAt'] as String? ?? '');
+      if (!mounted) return;
+      // Offer to restore if saved within the last 7 days
+      if (savedAt != null &&
+          DateTime.now().difference(savedAt).inDays <= 7) {
+        final restore = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Restore service plan?'),
+            content: Text(
+              'Found a saved service plan from '
+              '${savedAt.day}/${savedAt.month}/${savedAt.year} '
+              'with ${items.length} item${items.length == 1 ? '' : 's'}.\n\n'
+              'Would you like to restore it?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Start fresh'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Restore'),
+              ),
+            ],
+          ),
+        );
+        if (restore == true && mounted) {
+          setState(() {
+            _plan.addAll(items);
+            _activeIndex = data['activeIndex'] as int? ?? -1;
+          });
+        }
       }
-    });
+    } catch (e) {
+      debugPrint('Load service plan failed: $e');
+    }
   }
 
   // ── Quick-jump ─────────────────────────────────────────────────────────────
@@ -2178,82 +2842,7 @@ class _RangeBadge extends StatelessWidget {
 
 /// A compact card in the horizontal queue strip.
 /// Shows reference + version abbreviation; tap to preview, × to remove.
-class _QueueCard extends StatelessWidget {
-  const _QueueCard({
-    required this.item,
-    required this.isActive,
-    required this.onTap,
-    required this.onRemove,
-  });
 
-  final ScriptureQueueItem item;
-  final bool isActive;
-  final VoidCallback onTap;
-  final VoidCallback onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        margin: const EdgeInsets.only(right: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: isActive
-              ? context.t.accentBlue.withValues(alpha: 0.15)
-              : context.t.surface,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: isActive
-                ? context.t.accentBlue.withValues(alpha: 0.5)
-                : context.t.border,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.reference,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: isActive
-                        ? context.t.accentBlue
-                        : context.t.textPrimary,
-                  ),
-                ),
-                // Show which version this card came from
-                Text(
-                  item.version.abbreviation,
-                  style: TextStyle(
-                    fontSize: 9,
-                    color: isActive
-                        ? context.t.accentBlue.withValues(alpha: 0.7)
-                        : context.t.textMuted,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(width: 6),
-            GestureDetector(
-              onTap: onRemove,
-              child: Icon(
-                Icons.close_rounded,
-                size: 12,
-                color: isActive ? context.t.accentBlue : context.t.textMuted,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 // ── _PreviewHeader ─────────────────────────────────────────────────────────────
 
@@ -2340,19 +2929,46 @@ class _PreviewHeader extends StatelessWidget {
 // ── _PreviewTextCard ────────────────────────────────────────────────────────────
 
 class _PreviewTextCard extends StatelessWidget {
+  /// For scripture — rich text with italic/bold markup rendered.
   const _PreviewTextCard({
-    required this.text,
+    this.text,
+    this.richText,
     required this.textAlign,
     this.fontSize = 26,
-  });
+  }) : assert(text != null || richText != null);
 
-  final String text;
+  /// Plain string — used for song lyrics.
+  final String? text;
+
+  /// Rich-text builder — used for scripture (italic, bold, etc.).
+  /// Receives the base [TextStyle] and returns a [TextSpan].
+  final TextSpan Function(TextStyle base)? richText;
+
   final TextAlign textAlign;
   final double fontSize;
 
   @override
   Widget build(BuildContext context) {
     final t = context.t;
+    final base = TextStyle(
+      fontSize: fontSize,
+      height: 1.85,
+      color: t.textPrimary,
+      fontWeight: FontWeight.w500,
+      letterSpacing: 0.1,
+    );
+
+    final child = richText != null
+        ? RichText(
+            text: richText!(base),
+            textAlign: textAlign,
+          )
+        : Text(
+            text!,
+            textAlign: textAlign,
+            style: base,
+          );
+
     return Container(
       padding: const EdgeInsets.all(36),
       decoration: BoxDecoration(
@@ -2369,19 +2985,7 @@ class _PreviewTextCard extends StatelessWidget {
                 ),
               ],
       ),
-      child: SingleChildScrollView(
-        child: Text(
-          text,
-          textAlign: textAlign,
-          style: TextStyle(
-            fontSize: fontSize,
-            height: 1.85,
-            color: t.textPrimary,
-            fontWeight: FontWeight.w500,
-            letterSpacing: 0.1,
-          ),
-        ),
-      ),
+      child: SingleChildScrollView(child: child),
     );
   }
 }
@@ -2421,6 +3025,55 @@ class _TipRow extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAN QUICK BUTTON  — small pill button for the service plan header
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _PlanQuickButton extends StatelessWidget {
+  const _PlanQuickButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: color.withValues(alpha: 0.3)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 10, color: color),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+                color: color,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

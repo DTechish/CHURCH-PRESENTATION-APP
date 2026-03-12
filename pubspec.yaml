@@ -39,6 +39,8 @@ dependencies:
   sqlite3: ^2.1.0
   # Bundles SQLite3 binaries for cross-platform support (Linux, macOS, Windows)
   sqlite3_flutter_libs: ^0.5.0
+  # Used to locate the documents directory where we store bible.db
+  path_provider: ^2.1.0
 
 dev_dependencies:
   flutter_test:
