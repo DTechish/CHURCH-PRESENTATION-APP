@@ -16,9 +16,12 @@ A Flutter application designed for church presentations with Bible content, medi
   - AMP (Amplified Bible)
   - ESVGSB (ESV Gospel Study Bible)
   - NASU (New American Standard Update)
-
-### Styling
-- Custom app theme configuration in `app_theme.dart`
+  - KJV (King James Version)
+  - NKJV (NEW King James Version)
+  - MSG (THE MESSAGE)
+  - NLT (New Living Translation)
+  - NIV (New International Version)
+  - CSB (Christian Standard Bible)
 
 ### Platform Support
 - Linux
@@ -34,5 +37,4 @@ A Flutter application designed for church presentations with Bible content, medi
 - [ ] Add presentation mode/full-screen display
 - [ ] Implement data persistence and user preferences
 - [ ] Add error handling and loading states
-- [ ] Create tests
-- [ ] Mobile platform support (iOS/Android)
+

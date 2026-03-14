@@ -43,6 +43,7 @@ class ScriptureQueueItem {
     required this.endVerse,
     required this.verses,
     required this.version,
+    this.liveVerseIndex = 0,
   });
 
   final String book;
@@ -51,10 +52,34 @@ class ScriptureQueueItem {
   final int endVerse;
   final List<Map<String, dynamic>> verses;
   final BibleVersion version;
+  /// Which verse (by index into [verses]) is currently being projected.
+  final int liveVerseIndex;
 
-  String get reference => startVerse == endVerse
-      ? '$book $chapter:$startVerse'
-      : '$book $chapter:$startVerse–$endVerse';
+  /// Return a copy with a different liveVerseIndex.
+  ScriptureQueueItem withLiveIndex(int i) => ScriptureQueueItem(
+    book: book, chapter: chapter,
+    startVerse: startVerse, endVerse: endVerse,
+    verses: verses, version: version,
+    liveVerseIndex: i.clamp(0, verses.isEmpty ? 0 : verses.length - 1),
+  );
+
+  /// The verse number currently live on screen.
+  int? get liveVerseNum =>
+      verses.isEmpty ? null : verses[liveVerseIndex.clamp(0, verses.length - 1)]['verse'] as int?;
+
+  String get reference {
+    final label = startVerse == endVerse
+        ? '$startVerse'
+        : '$startVerse–$endVerse';
+    return '$book $chapter:$label';
+  }
+
+  /// Short label for plan row subtitle: shows live verse number.
+  String liveLabel() {
+    final v = liveVerseNum;
+    if (v == null) return version.abbreviation;
+    return 'v$v  ·  ${version.abbreviation}';
+  }
 
   String get plainText {
     final buf = StringBuffer();
@@ -107,8 +132,48 @@ class ScriptureQueueItem {
       if (!firstBlock) children.add(TextSpan(text: '\n\n', style: base));
       firstBlock = false;
       children.add(TextSpan(text: label, style: numStyle));
-      for (final span in spans) {
-        children.add(TextSpan(text: span.text, style: span.toTextStyle(base)));
+
+      for (int k = 0; k < spans.length; k++) {
+        final span = spans[k];
+        if (span.text.isEmpty) continue;
+
+        if (span.style == SpanStyle.italic) {
+          final word = span.text.trim();
+          if (word.isEmpty) continue;
+
+          // Punctuation that must NOT be preceded by a space
+          const punct = ',.:;!?)]-—–"\'';
+          final nextText = k + 1 < spans.length ? spans[k + 1].text : '';
+          final needsTrailing = nextText.isNotEmpty && !punct.contains(nextText[0]);
+
+          // Always strip trailing space from previous TextSpan (if any) so we
+          // don't double-space, then embed the space INSIDE the WidgetSpan.
+          // A WidgetSpan is an independent layout box — spaces in adjacent
+          // TextSpans collapse against it, so we must own both spaces ourselves.
+          if (children.isNotEmpty && children.last is TextSpan) {
+            final prev = children.last as TextSpan;
+            final prevText = prev.text ?? '';
+            if (prevText.endsWith(' ')) {
+              children[children.length - 1] =
+                  TextSpan(text: prevText.trimRight(), style: prev.style);
+            }
+          }
+
+          // Build the text as " word" or " word " — leading space always,
+          // trailing space only when next token is not punctuation.
+          final display = ' $word${needsTrailing ? ' ' : ''}';
+
+          children.add(WidgetSpan(
+            alignment: PlaceholderAlignment.baseline,
+            baseline: TextBaseline.alphabetic,
+            child: Transform(
+              transform: Matrix4.skewX(-0.15),
+              child: Text(display, style: base),
+            ),
+          ));
+        } else {
+          children.add(TextSpan(text: span.text, style: span.toTextStyle(base)));
+        }
       }
     }
     return TextSpan(children: children);
@@ -132,19 +197,7 @@ class ScriptureQueueItem {
     // Strip truncated tags at end of string (NASB: verses ending with '<p')
     s = s.replaceAll(RegExp(r'<[a-zA-Z]+$', multiLine: false), '');
 
-    // ── Ensure spaces around <i>…</i> boundaries ────────────────────────────
-    // Many versions store e.g. "word<i>it</i>was" or "</i>word" with no space.
-    // Fix: if the char immediately before <i> or after </i> is alphanumeric,
-    // inject a space so the italic word doesn't collide with surrounding text.
-    s = s
-        .replaceAllMapped(
-          RegExp(r'(\w)(<i>)', caseSensitive: false),
-          (m) => '${m[1]} ${m[2]}',
-        )
-        .replaceAllMapped(
-          RegExp(r'(</i>)(\w)', caseSensitive: false),
-          (m) => '${m[1]} ${m[2]}',
-        );
+    // (space normalisation handled in buildRichText)
 
     // ── Step 2: tokenise with a case-insensitive tag regex ──────────────────
     // Handles: <pb/> <br/> <f> </f> <i> </i> <e> </e> <n> </n>
@@ -389,7 +442,7 @@ class ServiceItem {
 
   String get subtitle {
     switch (type) {
-      case ServiceItemType.scripture:    return scriptureItem?.version.abbreviation ?? '';
+      case ServiceItemType.scripture:    return scriptureItem?.liveLabel() ?? '';
       case ServiceItemType.song:
         final label = song?['_sectionLabel'];
         return (label != null && label.isNotEmpty)
@@ -435,6 +488,7 @@ class ServiceItem {
       m['startVerse']  = si.startVerse;
       m['endVerse']    = si.endVerse;
       m['versionAbbr'] = si.version.abbreviation;
+      m['liveVerseIndex'] = si.liveVerseIndex;
       m['verses']      = si.verses;
     } else if (type == ServiceItemType.song) {
       m['song'] = song;
@@ -463,6 +517,7 @@ class ServiceItem {
               startVerse: m['startVerse'] as int,
               endVerse:   m['endVerse'] as int,
               version:    version,
+              liveVerseIndex: m['liveVerseIndex'] as int? ?? 0,
               verses: (m['verses'] as List)
                   .map((v) => Map<String, dynamic>.from(v as Map))
                   .toList(),
@@ -493,6 +548,46 @@ class ServiceItem {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PLAN SECTION — named group of ServiceItems (e.g. "Worship", "Message")
+// ─────────────────────────────────────────────────────────────────────────────
+
+class PlanSection {
+  PlanSection({
+    required this.title,
+    required this.items,
+    String? id,
+    this.isCollapsed = false,
+  }) : id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
+
+  final String id;
+  String title;
+  List<ServiceItem> items;
+  bool isCollapsed;
+
+  Map<String, dynamic> toJson() => {
+    'id':          id,
+    'title':       title,
+    'isCollapsed': isCollapsed,
+    'items':       items.map((e) => e.toJson()).toList(),
+  };
+
+  static PlanSection? fromJson(Map<String, dynamic> m) {
+    try {
+      final items = (m['items'] as List)
+          .map((e) => ServiceItem.fromJson(Map<String, dynamic>.from(e as Map)))
+          .whereType<ServiceItem>()
+          .toList();
+      return PlanSection(
+        id:          m['id'] as String? ?? '',
+        title:       m['title'] as String? ?? 'Section',
+        isCollapsed: m['isCollapsed'] as bool? ?? false,
+        items:       items,
+      );
+    } catch (_) { return null; }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SERVICE PLAN DOCUMENT — named, dated, saveable
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -500,45 +595,65 @@ class ServicePlan {
   ServicePlan({
     required this.title,
     required this.date,
-    required this.items,
+    required this.sections,
     String? id,
   }) : id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
 
   final String id;
   String title;
   DateTime date;
-  List<ServiceItem> items;
+  List<PlanSection> sections;
 
-  /// File-safe name for saving, e.g. "2026-03-15_Morning-Service.json"
+  /// All items across all sections (flat, in order).
+  List<ServiceItem> get allItems =>
+      sections.expand((s) => s.items).toList();
+
+  /// File-safe name for saving.
   String get fileName {
     final d = '${date.year.toString().padLeft(4, '0')}-'
         '${date.month.toString().padLeft(2, '0')}-'
         '${date.day.toString().padLeft(2, '0')}';
-    final t = title.trim().replaceAll(RegExp(r'[^\w\s-]'), '').replaceAll(RegExp(r'\s+'), '-');
+    final t = title.trim()
+        .replaceAll(RegExp(r'[^\w\s-]'), '')
+        .replaceAll(RegExp(r'\s+'), '-');
     return '${d}_$t.json';
   }
 
   Map<String, dynamic> toJson() => {
-    'id':    id,
-    'title': title,
-    'date':  date.toIso8601String(),
-    'items': items.map((e) => e.toJson()).toList(),
+    'id':       id,
+    'title':    title,
+    'date':     date.toIso8601String(),
+    'sections': sections.map((e) => e.toJson()).toList(),
   };
 
   static ServicePlan? fromJson(Map<String, dynamic> m) {
     try {
-      final items = (m['items'] as List)
-          .map((e) => ServiceItem.fromJson(Map<String, dynamic>.from(e as Map)))
-          .whereType<ServiceItem>()
+      // Support old format (flat items list) by wrapping in one section
+      if (m.containsKey('items') && !m.containsKey('sections')) {
+        final items = (m['items'] as List)
+            .map((e) => ServiceItem.fromJson(Map<String, dynamic>.from(e as Map)))
+            .whereType<ServiceItem>()
+            .toList();
+        return ServicePlan(
+          id:       m['id'] as String? ?? '',
+          title:    m['title'] as String? ?? 'Untitled Service',
+          date:     DateTime.tryParse(m['date'] as String? ?? '') ?? DateTime.now(),
+          sections: [PlanSection(title: 'Service', items: items)],
+        );
+      }
+      final sections = (m['sections'] as List)
+          .map((e) => PlanSection.fromJson(Map<String, dynamic>.from(e as Map)))
+          .whereType<PlanSection>()
           .toList();
+      if (sections.isEmpty) {
+        sections.add(PlanSection(title: 'Service', items: []));
+      }
       return ServicePlan(
-        id:    m['id'] as String? ?? '',
-        title: m['title'] as String? ?? 'Untitled Service',
-        date:  DateTime.tryParse(m['date'] as String? ?? '') ?? DateTime.now(),
-        items: items,
+        id:       m['id'] as String? ?? '',
+        title:    m['title'] as String? ?? 'Untitled Service',
+        date:     DateTime.tryParse(m['date'] as String? ?? '') ?? DateTime.now(),
+        sections: sections,
       );
-    } catch (_) {
-      return null;
-    }
+    } catch (_) { return null; }
   }
 }
