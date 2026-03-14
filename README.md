@@ -1,4 +1,4 @@
-# Church Presentation App — File Structure
+# Church Presentation App
 
 ![App Screenshot](screenshots/progress-01.png)
 
