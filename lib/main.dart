@@ -1,9 +1,24 @@
-// Main entry point for the Church Presentation App
 import 'package:flutter/material.dart';
+import 'package:window_manager/window_manager.dart';
 import 'screens/home_screen.dart';
 import 'app_theme.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await windowManager.ensureInitialized();
+
+  const WindowOptions windowOptions = WindowOptions(
+    minimumSize: Size(1700, 900),
+    size: Size(1700, 900),
+    center: true,
+    title: 'Church Presentation App',
+  );
+
+  await windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.show();
+    await windowManager.focus();
+  });
+
   runApp(const ChurchPresentationApp());
 }
 

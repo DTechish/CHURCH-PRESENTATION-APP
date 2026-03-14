@@ -186,9 +186,9 @@ void main() {
 
           // ── 4. Query every verse ───────────────────────────────────────────
           final selectCols = [
-            if (bookCol    != null) bookCol,
-            if (chapterCol != null) chapterCol,
-            if (verseCol   != null) verseCol,
+            ?bookCol,
+            ?chapterCol,
+            ?verseCol,
             textCol,
           ].join(', ');
 
@@ -241,7 +241,9 @@ void main() {
               final extra     = locations.length - 5;
 
               print('  ${e.key}  (${locations.length} occurrence${locations.length == 1 ? '' : 's'})');
-              for (final l in shown) print(l);
+              for (final l in shown) {
+                print(l);
+              }
               if (extra > 0) print('    … and $extra more');
               print('');
             }
