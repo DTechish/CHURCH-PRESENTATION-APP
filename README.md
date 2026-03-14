@@ -1,5 +1,7 @@
 # Church Presentation App — File Structure
 
+![App Screenshot](screenshots/progress-01.png)
+
 ## Directory layout
 
 ```
